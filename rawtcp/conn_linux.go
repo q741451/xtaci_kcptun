@@ -25,9 +25,7 @@ var (
 	orphanExpire = 5 * time.Second
 )
 
-// fingerprint mimics a real Linux TCP stack's window/options/TTL so that
-// hand-crafted segments don't stand out from what the kernel would have
-// sent on this connection.
+// fingerprint mimics a real Linux TCP stack's window/options/TTL.
 var fingerprint = struct {
 	window uint16
 	ttl    uint16
@@ -55,9 +53,8 @@ type flow struct {
 	header layers.TCP
 }
 
-// Conn is a packet-oriented connection emulated over raw TCP. It implements
-// net.PacketConn (ReadFrom/WriteTo/Close/LocalAddr/Set*Deadline), which is
-// exactly what kcp-go's NewConn/ServeConn accept.
+// Conn is a packet-oriented connection emulated over raw TCP; it implements
+// net.PacketConn, as needed by kcp-go's NewConn/ServeConn.
 type Conn struct {
 	elem    *list.Element
 	die     chan struct{}
@@ -92,8 +89,7 @@ func (c *Conn) lockflow(addr net.Addr, f func(*flow)) {
 	c.flowsLock.Unlock()
 }
 
-// cleaner evicts idle flows so long-lived listeners don't leak memory for
-// peers that went away without a FIN.
+// cleaner evicts idle flows.
 func (c *Conn) cleaner() {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
@@ -122,9 +118,7 @@ func (c *Conn) cleaner() {
 	}
 }
 
-// captureFlow reads every inbound raw IP packet on handle and, for the ones
-// that are TCP segments addressed to port, updates flow state and delivers
-// their payload to ReadFrom.
+// captureFlow reads inbound segments on handle and delivers payloads to ReadFrom.
 func (c *Conn) captureFlow(handle *net.IPConn, port int) {
 	buf := make([]byte, 2048)
 	opt := gopacket.DecodeOptions{NoCopy: true, Lazy: true}
@@ -203,8 +197,7 @@ func (c *Conn) ReadFrom(p []byte) (int, net.Addr, error) {
 	}
 }
 
-// WriteTo implements net.PacketConn: it builds one hand-crafted TCP segment
-// carrying p and writes it out the raw IP socket for the flow's peer.
+// WriteTo implements net.PacketConn.
 func (c *Conn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
 	var deadline <-chan time.Time
 	if d, ok := c.writeDeadline.Load().(time.Time); ok && !d.IsZero() {
@@ -288,9 +281,7 @@ func (c *Conn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
 	return n, err
 }
 
-// Close tears down the connection: closes the kernel-side TCP socket(s) and
-// raw IP handles, and removes the iptables/ip6tables rule this Conn
-// installed. Safe to call more than once.
+// Close tears down the connection. Safe to call more than once.
 func (c *Conn) Close() error {
 	var err error
 	c.dieOnce.Do(func() {
@@ -354,8 +345,7 @@ func (c *Conn) SetWriteDeadline(t time.Time) error {
 	return nil
 }
 
-// SetDSCP sets the 6-bit DSCP field (IPv4) / traffic class (IPv6) on the raw
-// IP socket(s), mirroring kcp.UDPSession.SetDSCP.
+// SetDSCP sets the 6-bit DSCP field (IPv4) / traffic class (IPv6).
 func (c *Conn) SetDSCP(dscp int) error {
 	for _, h := range c.handles {
 		if err := setDSCP(h, dscp); err != nil {
@@ -386,12 +376,9 @@ func (c *Conn) SetWriteBuffer(bytes int) error {
 }
 
 // Dial completes a real TCP handshake to address and returns a
-// packet-oriented connection that emulates it over raw sockets.
-//
-// This does not touch iptables/ip6tables itself (see doc.go): the deployer
-// is expected to have a DROP rule in place for outbound TTL=1/hop-limit=1
-// TCP packets to address before calling Dial, and to remove it when done.
-func Dial(network, address string) (*Conn, error) {
+// packet-oriented connection that emulates it over raw sockets. mark == 0
+// skips SO_MARK; see doc.go for the firewall rule this requires.
+func Dial(network, address string, mark int) (*Conn, error) {
 	raddr, err := net.ResolveTCPAddr(network, address)
 	if err != nil {
 		return nil, err
@@ -425,6 +412,9 @@ func Dial(network, address string) (*Conn, error) {
 		c.Close()
 		return nil, err
 	}
+	if mark != 0 {
+		setMark(tcpconn, mark) // best-effort, see doc.go
+	}
 
 	go io.Copy(ioutil.Discard, tcpconn)
 
@@ -436,13 +426,9 @@ func Dial(network, address string) (*Conn, error) {
 }
 
 // Listen accepts TCP connections on address and returns a single
-// packet-oriented connection multiplexing every accepted peer.
-//
-// This does not touch iptables/ip6tables itself (see doc.go): the deployer
-// is expected to have a DROP rule in place for outbound TTL=1/hop-limit=1
-// TCP packets with source port address's port before calling Listen, and
-// to remove it when done.
-func Listen(network, address string) (*Conn, error) {
+// packet-oriented connection multiplexing every accepted peer. mark == 0
+// skips SO_MARK; see doc.go for the firewall rule this requires.
+func Listen(network, address string, mark int) (*Conn, error) {
 	laddr, err := net.ResolveTCPAddr(network, address)
 	if err != nil {
 		return nil, err
@@ -517,6 +503,9 @@ func Listen(network, address string) (*Conn, error) {
 				conn.Close()
 				continue
 			}
+			if mark != 0 {
+				setMark(conn, mark) // best-effort, see doc.go
+			}
 			c.lockflow(conn.RemoteAddr(), func(e *flow) { e.conn = conn })
 			go io.Copy(ioutil.Discard, conn)
 		}
@@ -529,10 +518,7 @@ func Listen(network, address string) (*Conn, error) {
 	return wrap(c), nil
 }
 
-// Cleanup gracefully closes every live Conn (client and server side alike),
-// releasing their sockets and stopping their goroutines. Call this from a
-// SIGINT/SIGTERM handler for a clean shutdown. It does not touch
-// iptables/ip6tables -- see doc.go.
+// Cleanup gracefully closes every live Conn; call it from a signal handler.
 func Cleanup() {
 	connListMu.Lock()
 	var wg sync.WaitGroup
@@ -566,6 +552,19 @@ func setTTL(c *net.TCPConn, ttl int) error {
 	return serr
 }
 
+// setMark sets SO_MARK on c; best-effort, see doc.go.
+func setMark(c *net.TCPConn, mark int) error {
+	raw, err := c.SyscallConn()
+	if err != nil {
+		return err
+	}
+	var serr error
+	raw.Control(func(fd uintptr) {
+		serr = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_MARK, mark)
+	})
+	return serr
+}
+
 func setDSCP(c *net.IPConn, dscp int) error {
 	raw, err := c.SyscallConn()
 	if err != nil {
@@ -585,10 +584,7 @@ func setDSCP(c *net.IPConn, dscp int) error {
 	return serr
 }
 
-// wrap attaches a finalizer so a Conn that's merely dropped (never
-// Close()-d or reached by Cleanup) still releases its rule and sockets once
-// garbage collected -- a last-resort safety net, not a substitute for
-// calling Cleanup() from a signal handler.
+// wrap attaches a finalizer so a dropped Conn still gets closed on GC.
 func wrap(c *Conn) *Conn {
 	runtime.SetFinalizer(c, func(c *Conn) { c.Close() })
 	return c

@@ -9,18 +9,16 @@ import (
 
 var errNotSupported = errors.New("rawtcp: not supported on this platform (linux only)")
 
-// Conn satisfies net.PacketConn on non-Linux platforms so this package
-// still links, but Dial/Listen always fail: the technique needs raw IP
-// sockets and iptables, which are Linux-specific.
+// Conn satisfies net.PacketConn so this package still links on non-Linux.
 type Conn struct{ net.PacketConn }
 
 // Dial always fails on non-Linux platforms.
-func Dial(network, address string) (*Conn, error) {
+func Dial(network, address string, mark int) (*Conn, error) {
 	return nil, errNotSupported
 }
 
 // Listen always fails on non-Linux platforms.
-func Listen(network, address string) (*Conn, error) {
+func Listen(network, address string, mark int) (*Conn, error) {
 	return nil, errNotSupported
 }
 

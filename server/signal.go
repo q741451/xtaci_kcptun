@@ -26,8 +26,6 @@ func sigHandler() {
 		case syscall.SIGUSR1:
 			log.Printf("KCP SNMP:%+v", kcp.DefaultSnmp.Copy())
 		default:
-			// SIGINT/SIGTERM/SIGHUP: release rawtcp's sockets before
-			// exiting instead of letting process death do it implicitly.
 			rawtcp.Cleanup()
 			os.Exit(0)
 		}

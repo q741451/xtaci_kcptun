@@ -18,6 +18,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/urfave/cli"
 	kcp "github.com/xtaci/kcp-go"
+	"github.com/xtaci/kcptun/rawtcp"
 	"github.com/xtaci/smux"
 
 	"path/filepath"
@@ -257,7 +258,12 @@ func main() {
 		},
 		cli.BoolFlag{
 			Name:  "tcp",
-			Usage: "to emulate a TCP connection (linux only, requires root/CAP_NET_RAW; a DROP iptables/ip6tables rule for this must be provisioned externally, see rawtcp/doc.go)",
+			Usage: "to emulate a TCP connection (linux only, root; firewall rule required, see rawtcp/doc.go)",
+		},
+		cli.IntFlag{
+			Name:  "tcpmark",
+			Value: rawtcp.DefaultMark,
+			Usage: "fwmark for -tcp's firewall rule (SO_MARK); 0 disables marking",
 		},
 		cli.StringFlag{
 			Name:  "c",
@@ -295,6 +301,7 @@ func main() {
 		config.SnmpPeriod = c.Int("snmpperiod")
 		config.Quiet = c.Bool("quiet")
 		config.TCP = c.Bool("tcp")
+		config.TCPMark = c.Int("tcpmark")
 
 		if c.String("c") != "" {
 			err := parseJSONConfig(&config, c.String("c"))
@@ -379,6 +386,9 @@ func main() {
 		log.Println("snmpperiod:", config.SnmpPeriod)
 		log.Println("quiet:", config.Quiet)
 		log.Println("tcp:", config.TCP)
+		if config.TCP {
+			log.Printf("tcpmark: 0x%x", config.TCPMark)
+		}
 
 		smuxConfig := smux.DefaultConfig()
 		smuxConfig.MaxReceiveBuffer = config.SmuxBuf

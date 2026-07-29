@@ -6,12 +6,10 @@ import (
 	"github.com/xtaci/kcptun/rawtcp"
 )
 
-// dial connects to config.RemoteAddr, either as plain KCP-over-UDP or,
-// when config.TCP is set, KCP framed inside an emulated TCP connection (see
-// package rawtcp). Requires root/CAP_NET_RAW+CAP_NET_ADMIN and Linux.
+// dial connects over plain UDP, or, if config.TCP is set, via package rawtcp.
 func dial(config *Config, block kcp.BlockCrypt) (*kcp.UDPSession, error) {
 	if config.TCP {
-		conn, err := rawtcp.Dial("tcp", config.RemoteAddr)
+		conn, err := rawtcp.Dial("tcp", config.RemoteAddr, config.TCPMark)
 		if err != nil {
 			return nil, errors.Wrap(err, "rawtcp.Dial()")
 		}

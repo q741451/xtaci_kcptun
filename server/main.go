@@ -275,7 +275,12 @@ func main() {
 		},
 		cli.BoolFlag{
 			Name:  "tcp",
-			Usage: "also emulate a TCP listener alongside UDP (linux only, requires root/CAP_NET_RAW; a DROP iptables/ip6tables rule for this must be provisioned externally, see rawtcp/doc.go)",
+			Usage: "also emulate a TCP listener alongside UDP (linux only, root; firewall rule required, see rawtcp/doc.go)",
+		},
+		cli.IntFlag{
+			Name:  "tcpmark",
+			Value: rawtcp.DefaultMark,
+			Usage: "fwmark for -tcp's firewall rule (SO_MARK); 0 disables marking",
 		},
 		cli.StringFlag{
 			Name:  "c",
@@ -311,6 +316,7 @@ func main() {
 		config.Pprof = c.Bool("pprof")
 		config.Quiet = c.Bool("quiet")
 		config.TCP = c.Bool("tcp")
+		config.TCPMark = c.Int("tcpmark")
 
 		if c.String("c") != "" {
 			//Now only support json config file
@@ -389,6 +395,9 @@ func main() {
 		log.Println("pprof:", config.Pprof)
 		log.Println("quiet:", config.Quiet)
 		log.Println("tcp:", config.TCP)
+		if config.TCP {
+			log.Printf("tcpmark: 0x%x", config.TCPMark)
+		}
 
 		go snmpLogger(config.SnmpLog, config.SnmpPeriod)
 		if config.Pprof {
@@ -439,7 +448,7 @@ func main() {
 
 		// tcp stack, dual with udp when -tcp is given
 		if config.TCP {
-			conn, err := rawtcp.Listen("tcp", config.Listen)
+			conn, err := rawtcp.Listen("tcp", config.Listen, config.TCPMark)
 			if err != nil {
 				log.Println("rawtcp.Listen():", err)
 			} else {
