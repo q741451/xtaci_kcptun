@@ -36,6 +36,7 @@ github.com/xtaci/kcp-go v5.2.6+incompatible h1:WokjD7IJJopwivFVIleBjmuHYlhGTlR/J
 github.com/xtaci/kcp-go v5.2.6+incompatible/go.mod h1:bN6vIwHQbfHaHtFpEssmWsN45a+AZwO7eyRCmEIbtvE=
 github.com/xtaci/kcp-go v5.2.7+incompatible h1:NkJrwfMj3K6lRHfppR8H+oayahPS6GkGGF4BKiRAiFg=
 github.com/xtaci/kcp-go v5.2.7+incompatible/go.mod h1:bN6vIwHQbfHaHtFpEssmWsN45a+AZwO7eyRCmEIbtvE=
+github.com/xtaci/kcp-go v5.2.8+incompatible h1:WRlKHMAWdB08NEmWW0cpdEQcJsOYRdFwP7lA62AhpWo=
 github.com/xtaci/kcp-go v5.2.8+incompatible/go.mod h1:bN6vIwHQbfHaHtFpEssmWsN45a+AZwO7eyRCmEIbtvE=
 github.com/xtaci/smux v1.1.1 h1:ZyIo9XHuHkAeENzHR8yGWC+6xUSCTeP2tPTRE8mnLvc=
 github.com/xtaci/smux v1.1.1/go.mod h1:f+nYm6SpuHMy/SH0zpbvAFHT1QoMcgLOsWcFip5KfPw=
@@ -73,6 +74,7 @@ golang.org/x/crypto v0.0.0-20190418165655-df01cb2cc480 h1:O5YqonU5IWby+w98jVUG9h
 golang.org/x/crypto v0.0.0-20190418165655-df01cb2cc480/go.mod h1:WFFai1msRO1wXaEeE5yQxYXgSfI8pQAWXbQop6sCtWE=
 golang.org/x/crypto v0.0.0-20190422183909-d864b10871cd h1:sMHc2rZHuzQmrbVoSpt9HgerkXPyIeCSO6k0zUMGfFk=
 golang.org/x/crypto v0.0.0-20190422183909-d864b10871cd/go.mod h1:yigFU9vqHzYiE8UmvKecakEJjdnWj3jj499lnFckfCI=
+golang.org/x/crypto v0.0.0-20190426145343-a29dc8fdc734 h1:p/H982KKEjUnLJkM3tt/LemDnOc1GiZL5FCVlORJ5zo=
 golang.org/x/crypto v0.0.0-20190426145343-a29dc8fdc734/go.mod h1:yigFU9vqHzYiE8UmvKecakEJjdnWj3jj499lnFckfCI=
 golang.org/x/net v0.0.0-20190311183353-d8887717615a/go.mod h1:t9HGtf8HONx5eT2rtn7q6eTqICYqUVnKs3thJo3Qplg=
 golang.org/x/net v0.0.0-20190320064053-1272bf9dcd53 h1:kcXqo9vE6fsZY5X5Rd7R1l7fTgnWaDCVmln65REefiE=

@@ -1,5 +1,7 @@
 module github.com/xtaci/kcptun
 
+go 1.12
+
 require (
 	github.com/golang/snappy v0.0.1
 	github.com/klauspost/cpuid v1.2.1 // indirect
