@@ -59,6 +59,21 @@ which tunnels the original connection:
 
 > Application -> Target Server(8388/tcp) 
 
+### UDP Relay
+
+`-udprelay` runs a second, dedicated kcptun instance (own port, own KCP session) that carries a [shadowsocks-libev](https://github.com/shadowsocks/shadowsocks-libev) UDP relay's traffic instead of TCP — useful when a network throttles/blocks UDP but not TCP (pair with `-tcp` for the rawtcp disguise), or simply to make lossy UDP reliable.
+
+```
+Client: ./client_linux_amd64 -r "SERVER_IP:29901" -l "127.0.0.1:8388" -udprelay -ds 20 -ps 10 -acknodelay
+Server: ./server_linux_amd64 -t "127.0.0.1:8388" -l ":29901" -udprelay -ds 20 -ps 10 -acknodelay
+```
+
+Point ss-local/ss-server's UDP relay at the client's `-l` / server's `-t` address. Two new flags: `-udp-sendq` (per-flow send queue, drops newest on overflow) and `-udp-idle` (seconds before an idle flow closes).
+
+`-ds`/`-ps` (FEC) and `-acknodelay` recover loss without a retransmit round trip and measurably cut tail latency under loss; `-sndwnd`/`-rcvwnd` cap total in-flight packets across *all* flows on a session — the stock defaults (tuned for one bulk TCP stream) become the bottleneck once several flows run at real packet rates, so raise them if loss climbs with flow count.
+
+Measured over a real link with `tc netem delay 60ms 10ms loss 4%`: direct UDP lost **8.18%** of packets; the same traffic through `-udprelay` lost **0%** — KCP's ARQ recovers what the raw link drops.
+
 ### Install from source
 
 ```
@@ -137,24 +152,30 @@ GLOBAL OPTIONS:
    --remoteaddr value, -r value     kcp server address (default: "vps:29900")
    --key value                      pre-shared secret between client and server (default: "it's a secrect") [$KCPTUN_KEY]
    --crypt value                    aes, aes-128, aes-192, salsa20, blowfish, twofish, cast5, 3des, tea, xtea, xor, sm4, none (default: "aes")
-   --mode value                     profiles: fast3, fast2, fast, normal, manual (default: "fast")
-   --conn value                     set num of UDP connections to server (default: 1)
+   --mode value                     profiles: fast3, fast2, fast, normal, manual; also governs -udprelay (default: "fast")
+   --conn value                     set num of UDP connections to server; also governs -udprelay (default: 1)
    --autoexpire value               set auto expiration time(in seconds) for a single UDP connection, 0 to disable (default: 0)
    --scavengettl value              set how long an expired connection can live(in sec), -1 to disable (default: 600)
    --mtu value                      set maximum transmission unit for UDP packets (default: 1350)
-   --sndwnd value                   set send window size(num of packets) (default: 128)
-   --rcvwnd value                   set receive window size(num of packets) (default: 512)
-   --datashard value, --ds value    set reed-solomon erasure coding - datashard (default: 10)
-   --parityshard value, --ps value  set reed-solomon erasure coding - parityshard (default: 3)
+   --sndwnd value                   set send window size(num of packets); also governs -udprelay (default: 128)
+   --rcvwnd value                   set receive window size(num of packets); also governs -udprelay (default: 512)
+   --datashard value, --ds value    set reed-solomon erasure coding - datashard; also governs -udprelay (default: 10)
+   --parityshard value, --ps value  set reed-solomon erasure coding - parityshard; also governs -udprelay (default: 3)
    --dscp value                     set DSCP(6bit) (default: 0)
    --nocomp                         disable compression
+   --acknodelay                     flush ack immediately when a packet is received; also governs -udprelay
    --sockbuf value                  per-socket buffer in bytes (default: 4194304)
-   --smuxbuf value                  the overall de-mux buffer in bytes (default: 4194304)
+   --smuxbuf value                  the overall de-mux buffer in bytes, shared by every flow under -udprelay (default: 4194304)
    --keepalive value                seconds between heartbeats (default: 10)
    --snmplog value                  collect snmp to file, aware of timeformat in golang, like: ./snmp-20060102.log
    --snmpperiod value               snmp collect period, in seconds (default: 60)
    --log value                      specify a log file to output, default goes to stderr
    --quiet                          to suppress the 'stream open/close' messages
+   --tcp                            to emulate a TCP connection (linux only, root; firewall rule required, see rawtcp/doc.go)
+   --tcpmark value                  fwmark for -tcp's firewall rule (SO_MARK); 0 disables marking
+   --udprelay                       carry a shadowsocks-libev UDP relay's traffic instead of TCP; run as a separate instance/port from your TCP tunnel
+   --udp-sendq value                udprelay: per-flow outbound queue depth; drops newest once full (default: 64)
+   --udp-idle value                 udprelay: seconds an idle flow's stream stays open before closing (default: 60)
    -c value                         config from json file, which will override the command from shell
    --help, -h                       show help
    --version, -v                    print the version
@@ -177,22 +198,26 @@ GLOBAL OPTIONS:
    --target value, -t value         target server address (default: "127.0.0.1:12948")
    --key value                      pre-shared secret between client and server (default: "it's a secrect") [$KCPTUN_KEY]
    --crypt value                    aes, aes-128, aes-192, salsa20, blowfish, twofish, cast5, 3des, tea, xtea, xor, sm4, none (default: "aes")
-   --mode value                     profiles: fast3, fast2, fast, normal, manual (default: "fast")
+   --mode value                     profiles: fast3, fast2, fast, normal, manual; also governs -udprelay (default: "fast")
    --mtu value                      set maximum transmission unit for UDP packets (default: 1350)
-   --sndwnd value                   set send window size(num of packets) (default: 1024)
-   --rcvwnd value                   set receive window size(num of packets) (default: 1024)
-   --datashard value, --ds value    set reed-solomon erasure coding - datashard (default: 10)
-   --parityshard value, --ps value  set reed-solomon erasure coding - parityshard (default: 3)
+   --sndwnd value                   set send window size(num of packets); also governs -udprelay (default: 1024)
+   --rcvwnd value                   set receive window size(num of packets); also governs -udprelay (default: 1024)
+   --datashard value, --ds value    set reed-solomon erasure coding - datashard; also governs -udprelay (default: 10)
+   --parityshard value, --ps value  set reed-solomon erasure coding - parityshard; also governs -udprelay (default: 3)
    --dscp value                     set DSCP(6bit) (default: 0)
    --nocomp                         disable compression
+   --acknodelay                     flush ack immediately when a packet is received; also governs -udprelay
    --sockbuf value                  per-socket buffer in bytes (default: 4194304)
-   --smuxbuf value                  the overall de-mux buffer in bytes (default: 4194304)
+   --smuxbuf value                  the overall de-mux buffer in bytes, shared by every flow under -udprelay (default: 4194304)
    --keepalive value                seconds between heartbeats (default: 10)
    --snmplog value                  collect snmp to file, aware of timeformat in golang, like: ./snmp-20060102.log
    --snmpperiod value               snmp collect period, in seconds (default: 60)
    --pprof                          start profiling server on :6060
    --log value                      specify a log file to output, default goes to stderr
    --quiet                          to suppress the 'stream open/close' messages
+   --tcp                            also emulate a TCP listener alongside UDP (linux only, root; firewall rule required, see rawtcp/doc.go)
+   --tcpmark value                  fwmark for -tcp's firewall rule (SO_MARK); 0 disables marking
+   --udprelay                       carry a shadowsocks-libev UDP relay's traffic instead of TCP; run as a separate instance/port from your TCP tunnel
    -c value                         config from json file, which will override the command from shell
    --help, -h                       show help
    --version, -v                    print the version

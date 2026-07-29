@@ -174,7 +174,7 @@ func main() {
 		cli.StringFlag{
 			Name:  "mode",
 			Value: "fast",
-			Usage: "profiles: fast3, fast2, fast, normal, manual",
+			Usage: "profiles: fast3, fast2, fast, normal, manual (applies to --udprelay too; its many-small-packet traffic favors fast/fast2/fast3 over normal)",
 		},
 		cli.IntFlag{
 			Name:  "mtu",
@@ -184,22 +184,22 @@ func main() {
 		cli.IntFlag{
 			Name:  "sndwnd",
 			Value: 1024,
-			Usage: "set send window size(num of packets)",
+			Usage: "set send window size(num of packets) (--udprelay: sized in packets, not bytes -- raise it if many concurrent flows need more in-flight packets than this)",
 		},
 		cli.IntFlag{
 			Name:  "rcvwnd",
 			Value: 1024,
-			Usage: "set receive window size(num of packets)",
+			Usage: "set receive window size(num of packets) (--udprelay: same packet-count caveat as sndwnd)",
 		},
 		cli.IntFlag{
 			Name:  "datashard,ds",
 			Value: 10,
-			Usage: "set reed-solomon erasure coding - datashard",
+			Usage: "set reed-solomon erasure coding - datashard (--udprelay: raising this with parityshard recovers loss without a retransmit round trip -- the most direct lever against loss-induced latency spikes)",
 		},
 		cli.IntFlag{
 			Name:  "parityshard,ps",
 			Value: 3,
-			Usage: "set reed-solomon erasure coding - parityshard",
+			Usage: "set reed-solomon erasure coding - parityshard (--udprelay: see datashard)",
 		},
 		cli.IntFlag{
 			Name:  "dscp",
@@ -211,9 +211,8 @@ func main() {
 			Usage: "disable compression",
 		},
 		cli.BoolFlag{
-			Name:   "acknodelay",
-			Usage:  "flush ack immediately when a packet is received",
-			Hidden: true,
+			Name:  "acknodelay",
+			Usage: "flush ack immediately when a packet is received (--udprelay: shortens RTT/loss detection for the many-small-packet traffic it carries)",
 		},
 		cli.IntFlag{
 			Name:   "nodelay",
@@ -243,7 +242,7 @@ func main() {
 		cli.IntFlag{
 			Name:  "smuxbuf",
 			Value: 4194304,
-			Usage: "the overall de-mux buffer in bytes",
+			Usage: "the overall de-mux buffer in bytes (--udprelay: shared by every concurrent flow on a session, not per-flow -- raise it if you run many flows at once)",
 		},
 		cli.IntFlag{
 			Name:  "keepalive",
