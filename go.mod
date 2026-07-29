@@ -4,6 +4,7 @@ go 1.12
 
 require (
 	github.com/golang/snappy v0.0.1
+	github.com/google/gopacket v1.1.17
 	github.com/klauspost/cpuid v1.2.1 // indirect
 	github.com/klauspost/reedsolomon v1.9.1 // indirect
 	github.com/pkg/errors v0.8.1
@@ -19,3 +20,8 @@ require (
 	golang.org/x/text v0.3.2 // indirect
 	golang.org/x/tools v0.0.0-20190428024724-550556f78a90 // indirect
 )
+
+// v5.2.8 patched to fix a real bug where the batched Linux read-loop
+// panics (or, worse, silently stops receiving) on any net.PacketConn that
+// isn't a *net.UDPConn -- e.g. rawtcp.Conn. See third_party/kcp-go/PATCH_NOTES.md.
+replace github.com/xtaci/kcp-go => ./third_party/kcp-go

@@ -21,6 +21,7 @@ import (
 	"github.com/golang/snappy"
 	"github.com/urfave/cli"
 	kcp "github.com/xtaci/kcp-go"
+	"github.com/xtaci/kcptun/rawtcp"
 	"github.com/xtaci/smux"
 )
 
@@ -272,6 +273,10 @@ func main() {
 			Name:  "quiet",
 			Usage: "to suppress the 'stream open/close' messages",
 		},
+		cli.BoolFlag{
+			Name:  "tcp",
+			Usage: "also emulate a TCP listener alongside UDP (linux only, requires root/CAP_NET_RAW; a DROP iptables/ip6tables rule for this must be provisioned externally, see rawtcp/doc.go)",
+		},
 		cli.StringFlag{
 			Name:  "c",
 			Value: "", // when the value is not empty, the config path must exists
@@ -305,6 +310,7 @@ func main() {
 		config.SnmpPeriod = c.Int("snmpperiod")
 		config.Pprof = c.Bool("pprof")
 		config.Quiet = c.Bool("quiet")
+		config.TCP = c.Bool("tcp")
 
 		if c.String("c") != "" {
 			//Now only support json config file
@@ -365,9 +371,7 @@ func main() {
 			block, _ = kcp.NewAESBlockCrypt(pass)
 		}
 
-		lis, err := kcp.ListenWithOptions(config.Listen, block, config.DataShard, config.ParityShard)
-		checkError(err)
-		log.Println("listening on:", lis.Addr())
+		log.Println("listening on:", config.Listen)
 		log.Println("target:", config.Target)
 		log.Println("encryption:", config.Crypt)
 		log.Println("nodelay parameters:", config.NoDelay, config.Interval, config.Resend, config.NoCongestion)
@@ -384,41 +388,70 @@ func main() {
 		log.Println("snmpperiod:", config.SnmpPeriod)
 		log.Println("pprof:", config.Pprof)
 		log.Println("quiet:", config.Quiet)
-
-		if err := lis.SetDSCP(config.DSCP); err != nil {
-			log.Println("SetDSCP:", err)
-		}
-		if err := lis.SetReadBuffer(config.SockBuf); err != nil {
-			log.Println("SetReadBuffer:", err)
-		}
-		if err := lis.SetWriteBuffer(config.SockBuf); err != nil {
-			log.Println("SetWriteBuffer:", err)
-		}
+		log.Println("tcp:", config.TCP)
 
 		go snmpLogger(config.SnmpLog, config.SnmpPeriod)
 		if config.Pprof {
 			go http.ListenAndServe(":6060", nil)
 		}
 
-		for {
-			if conn, err := lis.AcceptKCP(); err == nil {
-				log.Println("remote address:", conn.RemoteAddr())
-				conn.SetStreamMode(true)
-				conn.SetWriteDelay(false)
-				conn.SetNoDelay(config.NoDelay, config.Interval, config.Resend, config.NoCongestion)
-				conn.SetMtu(config.MTU)
-				conn.SetWindowSize(config.SndWnd, config.RcvWnd)
-				conn.SetACKNoDelay(config.AckNodelay)
+		// loop accepts KCP sessions off lis until it errors out (listener closed).
+		var wg sync.WaitGroup
+		loop := func(lis *kcp.Listener) {
+			defer wg.Done()
+			if err := lis.SetDSCP(config.DSCP); err != nil {
+				log.Println("SetDSCP:", err)
+			}
+			if err := lis.SetReadBuffer(config.SockBuf); err != nil {
+				log.Println("SetReadBuffer:", err)
+			}
+			if err := lis.SetWriteBuffer(config.SockBuf); err != nil {
+				log.Println("SetWriteBuffer:", err)
+			}
 
-				if config.NoComp {
-					go handleMux(conn, &config)
+			for {
+				if conn, err := lis.AcceptKCP(); err == nil {
+					log.Println("remote address:", conn.RemoteAddr())
+					conn.SetStreamMode(true)
+					conn.SetWriteDelay(false)
+					conn.SetNoDelay(config.NoDelay, config.Interval, config.Resend, config.NoCongestion)
+					conn.SetMtu(config.MTU)
+					conn.SetWindowSize(config.SndWnd, config.RcvWnd)
+					conn.SetACKNoDelay(config.AckNodelay)
+
+					if config.NoComp {
+						go handleMux(conn, &config)
+					} else {
+						go handleMux(newCompStream(conn), &config)
+					}
 				} else {
-					go handleMux(newCompStream(conn), &config)
+					log.Printf("%+v", err)
+					return
 				}
-			} else {
-				log.Printf("%+v", err)
 			}
 		}
+
+		// udp stack, always on
+		udpLis, err := kcp.ListenWithOptions(config.Listen, block, config.DataShard, config.ParityShard)
+		checkError(err)
+		wg.Add(1)
+		go loop(udpLis)
+
+		// tcp stack, dual with udp when -tcp is given
+		if config.TCP {
+			conn, err := rawtcp.Listen("tcp", config.Listen)
+			if err != nil {
+				log.Println("rawtcp.Listen():", err)
+			} else {
+				tcpLis, err := kcp.ServeConn(block, config.DataShard, config.ParityShard, conn)
+				checkError(err)
+				wg.Add(1)
+				go loop(tcpLis)
+			}
+		}
+
+		wg.Wait()
+		return nil
 	}
 	myApp.Run(os.Args)
 }
