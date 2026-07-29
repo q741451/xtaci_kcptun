@@ -265,6 +265,20 @@ func main() {
 			Value: rawtcp.DefaultMark,
 			Usage: "fwmark for -tcp's firewall rule (SO_MARK); 0 disables marking",
 		},
+		cli.BoolFlag{
+			Name:  "udprelay",
+			Usage: "carry a shadowsocks-libev UDP relay's traffic instead of TCP; run this as a separate instance/port from your regular TCP tunnel",
+		},
+		cli.IntFlag{
+			Name:  "udp-sendq",
+			Value: 64,
+			Usage: "udprelay: per-flow outbound queue depth; new datagrams are dropped once it's full",
+		},
+		cli.IntFlag{
+			Name:  "udp-idle",
+			Value: 60,
+			Usage: "udprelay: seconds a flow can sit idle before its stream is closed",
+		},
 		cli.StringFlag{
 			Name:  "c",
 			Value: "", // when the value is not empty, the config path must exists
@@ -302,6 +316,9 @@ func main() {
 		config.Quiet = c.Bool("quiet")
 		config.TCP = c.Bool("tcp")
 		config.TCPMark = c.Int("tcpmark")
+		config.UDPRelay = c.Bool("udprelay")
+		config.UDPSendQ = c.Int("udp-sendq")
+		config.UDPIdle = c.Int("udp-idle")
 
 		if c.String("c") != "" {
 			err := parseJSONConfig(&config, c.String("c"))
@@ -328,10 +345,13 @@ func main() {
 		}
 
 		log.Println("version:", VERSION)
-		addr, err := net.ResolveTCPAddr("tcp", config.LocalAddr)
-		checkError(err)
-		listener, err := net.ListenTCP("tcp", addr)
-		checkError(err)
+		var listener *net.TCPListener
+		if !config.UDPRelay {
+			addr, err := net.ResolveTCPAddr("tcp", config.LocalAddr)
+			checkError(err)
+			listener, err = net.ListenTCP("tcp", addr)
+			checkError(err)
+		}
 
 		log.Println("initiating key derivation")
 		pass := pbkdf2.Key([]byte(config.Key), []byte(SALT), 4096, 32, sha1.New)
@@ -366,7 +386,11 @@ func main() {
 			block, _ = kcp.NewAESBlockCrypt(pass)
 		}
 
-		log.Println("listening on:", listener.Addr())
+		if config.UDPRelay {
+			log.Println("udprelay local listen:", config.LocalAddr)
+		} else {
+			log.Println("listening on:", listener.Addr())
+		}
 		log.Println("encryption:", config.Crypt)
 		log.Println("nodelay parameters:", config.NoDelay, config.Interval, config.Resend, config.NoCongestion)
 		log.Println("remote address:", config.RemoteAddr)
@@ -388,6 +412,11 @@ func main() {
 		log.Println("tcp:", config.TCP)
 		if config.TCP {
 			log.Printf("tcpmark: 0x%x", config.TCPMark)
+		}
+		log.Println("udprelay:", config.UDPRelay)
+		if config.UDPRelay {
+			log.Println("udp-sendq:", config.UDPSendQ)
+			log.Println("udp-idle:", config.UDPIdle)
 		}
 
 		smuxConfig := smux.DefaultConfig()
@@ -456,24 +485,38 @@ func main() {
 		chScavenger := make(chan *smux.Session, 128)
 		go scavenger(chScavenger, config.ScavengeTTL)
 		go snmpLogger(config.SnmpLog, config.SnmpPeriod)
+
+		// nextSession round-robins across the session pool, transparently
+		// rotating out a closed/expired session -- shared by both the TCP
+		// accept loop below and, for --udprelay, runUDPRelayClient. Only
+		// one of the two ever runs per process, so the shared rr/muxes
+		// access here never needs its own lock, same as before this was
+		// factored out.
 		rr := uint16(0)
+		nextSession := func() *smux.Session {
+			idx := rr % numconn
+			if muxes[idx].session.IsClosed() || (config.AutoExpire > 0 && time.Now().After(muxes[idx].ttl)) {
+				chScavenger <- muxes[idx].session
+				muxes[idx].session = waitConn()
+				muxes[idx].ttl = time.Now().Add(time.Duration(config.AutoExpire) * time.Second)
+			}
+			sess := muxes[idx].session
+			rr++
+			return sess
+		}
+
+		if config.UDPRelay {
+			checkError(runUDPRelayClient(&config, nextSession))
+			return nil
+		}
+
 		for {
 			p1, err := listener.AcceptTCP()
 			if err != nil {
 				log.Fatalln(err)
 			}
 			checkError(err)
-			idx := rr % numconn
-
-			// do auto expiration && reconnection
-			if muxes[idx].session.IsClosed() || (config.AutoExpire > 0 && time.Now().After(muxes[idx].ttl)) {
-				chScavenger <- muxes[idx].session
-				muxes[idx].session = waitConn()
-				muxes[idx].ttl = time.Now().Add(time.Duration(config.AutoExpire) * time.Second)
-			}
-
-			go handleClient(muxes[idx].session, p1, config.Quiet)
-			rr++
+			go handleClient(nextSession(), p1, config.Quiet)
 		}
 	}
 	myApp.Run(os.Args)

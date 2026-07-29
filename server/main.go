@@ -282,6 +282,10 @@ func main() {
 			Value: rawtcp.DefaultMark,
 			Usage: "fwmark for -tcp's firewall rule (SO_MARK); 0 disables marking",
 		},
+		cli.BoolFlag{
+			Name:  "udprelay",
+			Usage: "carry a shadowsocks-libev UDP relay's traffic instead of TCP; run this as a separate instance/port from your regular TCP tunnel",
+		},
 		cli.StringFlag{
 			Name:  "c",
 			Value: "", // when the value is not empty, the config path must exists
@@ -317,6 +321,7 @@ func main() {
 		config.Quiet = c.Bool("quiet")
 		config.TCP = c.Bool("tcp")
 		config.TCPMark = c.Int("tcpmark")
+		config.UDPRelay = c.Bool("udprelay")
 
 		if c.String("c") != "" {
 			//Now only support json config file
@@ -398,6 +403,7 @@ func main() {
 		if config.TCP {
 			log.Printf("tcpmark: 0x%x", config.TCPMark)
 		}
+		log.Println("udprelay:", config.UDPRelay)
 
 		go snmpLogger(config.SnmpLog, config.SnmpPeriod)
 		if config.Pprof {
@@ -428,7 +434,13 @@ func main() {
 					conn.SetWindowSize(config.SndWnd, config.RcvWnd)
 					conn.SetACKNoDelay(config.AckNodelay)
 
-					if config.NoComp {
+					if config.UDPRelay {
+						if config.NoComp {
+							go handleMuxUDP(conn, &config)
+						} else {
+							go handleMuxUDP(newCompStream(conn), &config)
+						}
+					} else if config.NoComp {
 						go handleMux(conn, &config)
 					} else {
 						go handleMux(newCompStream(conn), &config)
