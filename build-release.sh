@@ -17,9 +17,6 @@ if ! hash sha1sum 2>/dev/null; then
 fi
 
 UPX=false
-if hash upx 2>/dev/null; then
-	UPX=true
-fi
 
 VERSION=`date -u +%Y%m%d`
 LDFLAGS="-X main.VERSION=$VERSION -s -w"
