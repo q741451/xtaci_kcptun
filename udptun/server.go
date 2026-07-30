@@ -18,6 +18,7 @@ type ServerConfig struct {
 	Block     crypt.BlockCrypt
 	MaxPacket int  // largest packet on the wire, header included (--mtu)
 	SockBuf   int  // --sockbuf
+	DSCP      int  // --dscp
 	Idle      int  // seconds before an unused flow is closed
 	Quiet     bool // suppress per-flow logging
 }
@@ -62,6 +63,7 @@ func RunServer(cfg ServerConfig) error {
 		return err
 	}
 	applySockBuf(cfg.Conn, cfg.SockBuf)
+	applyDSCP(cfg.Conn, cfg.DSCP)
 
 	s := &server{
 		cfg:    cfg,

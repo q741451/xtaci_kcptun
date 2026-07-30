@@ -25,6 +25,7 @@ type config struct {
 	Crypt      string `json:"crypt"`
 	MTU        int    `json:"mtu"`
 	SockBuf    int    `json:"sockbuf"`
+	DSCP       int    `json:"dscp"`
 	KeepAlive  int    `json:"keepalive"`
 	Idle       int    `json:"idle"`
 	TCP        bool   `json:"tcp"`
@@ -44,6 +45,7 @@ func main() {
 	flag.StringVar(&c.Crypt, "crypt", "aes", udptun.CryptList)
 	flag.IntVar(&c.MTU, "mtu", 1350, "largest packet on the wire, header included; bigger datagrams are dropped")
 	flag.IntVar(&c.SockBuf, "sockbuf", 4194304, "per-socket buffer in bytes")
+	flag.IntVar(&c.DSCP, "dscp", 0, "set DSCP(6bit)")
 	flag.IntVar(&c.KeepAlive, "keepalive", 10, "seconds between heartbeats")
 	flag.IntVar(&c.Idle, "idle", 60, "seconds a flow can sit idle before it is dropped")
 	flag.BoolVar(&c.TCP, "tcp", false, "emulate a TCP connection (linux only, root; firewall rule required, see rawtcp/doc.go)")
@@ -82,6 +84,7 @@ func main() {
 	log.Println("encryption:", c.Crypt)
 	log.Println("mtu:", c.MTU, "payload limit:", c.MTU-udptun.HeaderSize)
 	log.Println("sockbuf:", c.SockBuf)
+	log.Println("dscp:", c.DSCP)
 	log.Println("keepalive:", c.KeepAlive)
 	log.Println("idle:", c.Idle)
 	log.Println("tcp:", c.TCP)
@@ -96,6 +99,7 @@ func main() {
 		Block:     block,
 		MaxPacket: c.MTU,
 		SockBuf:   c.SockBuf,
+		DSCP:      c.DSCP,
 		Idle:      c.Idle,
 		KeepAlive: c.KeepAlive,
 		Quiet:     c.Quiet,

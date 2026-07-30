@@ -71,7 +71,7 @@ Server: ./udptun_server_linux_amd64 -l ":29901" -t "127.0.0.1:8388" -key SECRET
 
 Point ss-local/ss-server's UDP relay at the client's `-l` / server's `-t` address.
 
-There is no KCP here, so loss is passed through rather than repaired. QUIC and DNS already recover on their own, and repeating that underneath only adds latency — a retransmit the application never asked for still delays everything queued behind it. That is also why these are separate binaries: none of kcptun's tuning applies, so putting them in the same command line would only invite parameters that do nothing. `-key`/`-crypt` mean exactly what they do in kcptun.
+There is no KCP here, so loss is passed through rather than repaired. QUIC and DNS already recover on their own, and repeating that underneath only adds latency — a retransmit the application never asked for still delays everything queued behind it. That is also why these are separate binaries: none of kcptun's tuning applies, so putting them in the same command line would only invite parameters that do nothing. `-key`, `-crypt` and `-dscp` mean exactly what they do in kcptun.
 
 `-mtu` caps each datagram, 24-byte header included, so the payload limit is 1326 by default. Nothing fragments below this layer: larger datagrams are dropped and logged. Headroom is tighter with `-tcp`, whose IP/TCP header costs 52 bytes against UDP's 28.
 
@@ -232,6 +232,8 @@ Usage of udptun_client_linux_amd64:
     	config from json file, which will override the command from shell
   -crypt string
     	aes, aes-128, aes-192, salsa20, blowfish, twofish, cast5, 3des, tea, xtea, xor, sm4, none (default "aes")
+  -dscp int
+    	set DSCP(6bit)
   -idle int
     	seconds a flow can sit idle before it is dropped (default 60)
   -keepalive int
@@ -262,6 +264,8 @@ Usage of udptun_server_linux_amd64:
     	config from json file, which will override the command from shell
   -crypt string
     	aes, aes-128, aes-192, salsa20, blowfish, twofish, cast5, 3des, tea, xtea, xor, sm4, none (default "aes")
+  -dscp int
+    	set DSCP(6bit)
   -idle int
     	seconds a flow can sit idle before it is dropped (default 60)
   -key string

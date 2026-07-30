@@ -26,6 +26,7 @@ import (
 	"sync"
 
 	"github.com/xtaci/kcp-go/crypt"
+	"golang.org/x/net/ipv4"
 )
 
 const (
@@ -63,6 +64,27 @@ func applySockBuf(conn net.PacketConn, size int) {
 		if err := c.SetWriteBuffer(size); err != nil {
 			log.Println("udptun SetWriteBuffer:", err)
 		}
+	}
+}
+
+// applyDSCP marks outgoing packets. rawtcp.Conn does this itself; a UDP socket
+// goes through x/net/ipv4, the same path kcp-go takes, so -dscp means the same
+// thing here as in kcptun.
+func applyDSCP(conn net.PacketConn, dscp int) {
+	if dscp == 0 {
+		return
+	}
+	var err error
+	switch c := conn.(type) {
+	case interface{ SetDSCP(int) error }:
+		err = c.SetDSCP(dscp)
+	case net.Conn:
+		err = ipv4.NewConn(c).SetTOS(dscp << 2)
+	default:
+		err = errors.New("transport does not support it")
+	}
+	if err != nil {
+		log.Println("udptun SetDSCP:", err)
 	}
 }
 
