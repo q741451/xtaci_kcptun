@@ -19,6 +19,7 @@ import (
 	"github.com/urfave/cli"
 	kcp "github.com/xtaci/kcp-go"
 	"github.com/xtaci/kcptun/rawtcp"
+	"github.com/xtaci/kcptun/udprelay"
 	"github.com/xtaci/smux"
 
 	"path/filepath"
@@ -146,12 +147,12 @@ func main() {
 		cli.StringFlag{
 			Name:  "mode",
 			Value: "fast",
-			Usage: "profiles: fast3, fast2, fast, normal, manual (applies to --udprelay too; its many-small-packet traffic favors fast/fast2/fast3 over normal)",
+			Usage: "profiles: fast3, fast2, fast, normal, manual",
 		},
 		cli.IntFlag{
 			Name:  "conn",
 			Value: 1,
-			Usage: "set num of UDP connections to server (applies to --udprelay too: spreads flows across sessions so one busy flow can't head-of-line-block another)",
+			Usage: "set num of UDP connections to server",
 		},
 		cli.IntFlag{
 			Name:  "autoexpire",
@@ -166,27 +167,27 @@ func main() {
 		cli.IntFlag{
 			Name:  "mtu",
 			Value: 1350,
-			Usage: "set maximum transmission unit for UDP packets",
+			Usage: "set maximum transmission unit for UDP packets (-udprelay: caps each datagram, 24-byte header included)",
 		},
 		cli.IntFlag{
 			Name:  "sndwnd",
 			Value: 128,
-			Usage: "set send window size(num of packets) (--udprelay: sized in packets, not bytes -- raise it if many concurrent flows need more in-flight packets than this)",
+			Usage: "set send window size(num of packets)",
 		},
 		cli.IntFlag{
 			Name:  "rcvwnd",
 			Value: 512,
-			Usage: "set receive window size(num of packets) (--udprelay: same packet-count caveat as sndwnd)",
+			Usage: "set receive window size(num of packets)",
 		},
 		cli.IntFlag{
 			Name:  "datashard,ds",
 			Value: 10,
-			Usage: "set reed-solomon erasure coding - datashard (--udprelay: raising this with parityshard recovers loss without a retransmit round trip -- the most direct lever against loss-induced latency spikes)",
+			Usage: "set reed-solomon erasure coding - datashard",
 		},
 		cli.IntFlag{
 			Name:  "parityshard,ps",
 			Value: 3,
-			Usage: "set reed-solomon erasure coding - parityshard (--udprelay: see datashard)",
+			Usage: "set reed-solomon erasure coding - parityshard",
 		},
 		cli.IntFlag{
 			Name:  "dscp",
@@ -199,7 +200,7 @@ func main() {
 		},
 		cli.BoolFlag{
 			Name:  "acknodelay",
-			Usage: "flush ack immediately when a packet is received (--udprelay: shortens RTT/loss detection for the many-small-packet traffic it carries)",
+			Usage: "flush ack immediately when a packet is received",
 		},
 		cli.IntFlag{
 			Name:   "nodelay",
@@ -229,7 +230,7 @@ func main() {
 		cli.IntFlag{
 			Name:  "smuxbuf",
 			Value: 4194304,
-			Usage: "the overall de-mux buffer in bytes (--udprelay: shared by every concurrent flow on a session, not per-flow -- raise it if you run many flows at once)",
+			Usage: "the overall de-mux buffer in bytes",
 		},
 		cli.IntFlag{
 			Name:  "keepalive",
@@ -266,17 +267,12 @@ func main() {
 		},
 		cli.BoolFlag{
 			Name:  "udprelay",
-			Usage: "carry a shadowsocks-libev UDP relay's traffic instead of TCP; run this as a separate instance/port from your regular TCP tunnel",
-		},
-		cli.IntFlag{
-			Name:  "udp-sendq",
-			Value: 64,
-			Usage: "udprelay: per-flow outbound queue depth; new datagrams are dropped once it's full",
+			Usage: "relay a shadowsocks-libev UDP relay as plain datagrams, without KCP; run as a separate instance/port",
 		},
 		cli.IntFlag{
 			Name:  "udp-idle",
 			Value: 60,
-			Usage: "udprelay: seconds a flow can sit idle before its stream is closed",
+			Usage: "udprelay: seconds a flow can sit idle before it is dropped",
 		},
 		cli.StringFlag{
 			Name:  "c",
@@ -316,7 +312,6 @@ func main() {
 		config.TCP = c.Bool("tcp")
 		config.TCPMark = c.Int("tcpmark")
 		config.UDPRelay = c.Bool("udprelay")
-		config.UDPSendQ = c.Int("udp-sendq")
 		config.UDPIdle = c.Int("udp-idle")
 
 		if c.String("c") != "" {
@@ -385,37 +380,53 @@ func main() {
 			block, _ = kcp.NewAESBlockCrypt(pass)
 		}
 
-		if config.UDPRelay {
-			log.Println("udprelay local listen:", config.LocalAddr)
-		} else {
-			log.Println("listening on:", listener.Addr())
-		}
-		log.Println("encryption:", config.Crypt)
-		log.Println("nodelay parameters:", config.NoDelay, config.Interval, config.Resend, config.NoCongestion)
+		// Report only what the chosen mode consults.
 		log.Println("remote address:", config.RemoteAddr)
-		log.Println("sndwnd:", config.SndWnd, "rcvwnd:", config.RcvWnd)
-		log.Println("compression:", !config.NoComp)
+		log.Println("encryption:", config.Crypt)
 		log.Println("mtu:", config.MTU)
-		log.Println("datashard:", config.DataShard, "parityshard:", config.ParityShard)
-		log.Println("acknodelay:", config.AckNodelay)
-		log.Println("dscp:", config.DSCP)
 		log.Println("sockbuf:", config.SockBuf)
-		log.Println("smuxbuf:", config.SmuxBuf)
 		log.Println("keepalive:", config.KeepAlive)
-		log.Println("conn:", config.Conn)
-		log.Println("autoexpire:", config.AutoExpire)
-		log.Println("scavengettl:", config.ScavengeTTL)
-		log.Println("snmplog:", config.SnmpLog)
-		log.Println("snmpperiod:", config.SnmpPeriod)
+		log.Println("dscp:", config.DSCP)
 		log.Println("quiet:", config.Quiet)
 		log.Println("tcp:", config.TCP)
 		if config.TCP {
 			log.Printf("tcpmark: 0x%x", config.TCPMark)
 		}
 		log.Println("udprelay:", config.UDPRelay)
-		if config.UDPRelay {
-			log.Println("udp-sendq:", config.UDPSendQ)
+
+		if !config.UDPRelay {
+			log.Println("listening on:", listener.Addr())
+			log.Println("nodelay parameters:", config.NoDelay, config.Interval, config.Resend, config.NoCongestion)
+			log.Println("sndwnd:", config.SndWnd, "rcvwnd:", config.RcvWnd)
+			log.Println("compression:", !config.NoComp)
+			log.Println("datashard:", config.DataShard, "parityshard:", config.ParityShard)
+			log.Println("acknodelay:", config.AckNodelay)
+			log.Println("smuxbuf:", config.SmuxBuf)
+			log.Println("conn:", config.Conn)
+			log.Println("autoexpire:", config.AutoExpire)
+			log.Println("scavengettl:", config.ScavengeTTL)
+			log.Println("snmplog:", config.SnmpLog)
+			log.Println("snmpperiod:", config.SnmpPeriod)
+		} else {
+			log.Println("udprelay local listen:", config.LocalAddr)
 			log.Println("udp-idle:", config.UDPIdle)
+
+			conn, remote, err := dialPacket(&config)
+			checkError(err)
+			log.Println("connection:", conn.LocalAddr(), "->", remote)
+
+			checkError(udprelay.RunClient(udprelay.ClientConfig{
+				LocalAddr: config.LocalAddr,
+				Conn:      conn,
+				Remote:    remote,
+				Block:     block,
+				MaxPacket: config.MTU,
+				SockBuf:   config.SockBuf,
+				Idle:      config.UDPIdle,
+				KeepAlive: config.KeepAlive,
+				Quiet:     config.Quiet,
+			}))
+			return nil
 		}
 
 		smuxConfig := smux.DefaultConfig()
@@ -486,11 +497,7 @@ func main() {
 		go snmpLogger(config.SnmpLog, config.SnmpPeriod)
 
 		// nextSession round-robins across the session pool, transparently
-		// rotating out a closed/expired session -- shared by both the TCP
-		// accept loop below and, for --udprelay, runUDPRelayClient. Only
-		// one of the two ever runs per process, so the shared rr/muxes
-		// access here never needs its own lock, same as before this was
-		// factored out.
+		// rotating out a closed/expired session.
 		rr := uint16(0)
 		nextSession := func() *smux.Session {
 			idx := rr % numconn
@@ -502,11 +509,6 @@ func main() {
 			sess := muxes[idx].session
 			rr++
 			return sess
-		}
-
-		if config.UDPRelay {
-			checkError(runUDPRelayClient(&config, nextSession))
-			return nil
 		}
 
 		for {

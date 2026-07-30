@@ -35,6 +35,7 @@ type Config struct {
 	TCP          bool   `json:"tcp"`
 	TCPMark      int    `json:"tcpmark"`
 	UDPRelay     bool   `json:"udprelay"`
+	UDPIdle      int    `json:"udpidle"`
 }
 
 func parseJSONConfig(config *Config, path string) error {

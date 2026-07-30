@@ -37,7 +37,6 @@ type Config struct {
 	TCP          bool   `json:"tcp"`
 	TCPMark      int    `json:"tcpmark"`
 	UDPRelay     bool   `json:"udprelay"`
-	UDPSendQ     int    `json:"udpsendq"`
 	UDPIdle      int    `json:"udpidle"`
 }
 
