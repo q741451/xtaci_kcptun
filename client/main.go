@@ -19,7 +19,6 @@ import (
 	"github.com/urfave/cli"
 	kcp "github.com/xtaci/kcp-go"
 	"github.com/xtaci/kcptun/rawtcp"
-	"github.com/xtaci/kcptun/udprelay"
 	"github.com/xtaci/smux"
 
 	"path/filepath"
@@ -167,7 +166,7 @@ func main() {
 		cli.IntFlag{
 			Name:  "mtu",
 			Value: 1350,
-			Usage: "set maximum transmission unit for UDP packets (-udprelay: caps each datagram, 24-byte header included)",
+			Usage: "set maximum transmission unit for UDP packets",
 		},
 		cli.IntFlag{
 			Name:  "sndwnd",
@@ -199,8 +198,9 @@ func main() {
 			Usage: "disable compression",
 		},
 		cli.BoolFlag{
-			Name:  "acknodelay",
-			Usage: "flush ack immediately when a packet is received",
+			Name:   "acknodelay",
+			Usage:  "flush ack immediately when a packet is received",
+			Hidden: true,
 		},
 		cli.IntFlag{
 			Name:   "nodelay",
@@ -265,15 +265,6 @@ func main() {
 			Value: rawtcp.DefaultMark,
 			Usage: "fwmark for -tcp's firewall rule (SO_MARK); 0 disables marking",
 		},
-		cli.BoolFlag{
-			Name:  "udprelay",
-			Usage: "relay a shadowsocks-libev UDP relay as plain datagrams, without KCP; run as a separate instance/port",
-		},
-		cli.IntFlag{
-			Name:  "udp-idle",
-			Value: 60,
-			Usage: "udprelay: seconds a flow can sit idle before it is dropped",
-		},
 		cli.StringFlag{
 			Name:  "c",
 			Value: "", // when the value is not empty, the config path must exists
@@ -311,8 +302,6 @@ func main() {
 		config.Quiet = c.Bool("quiet")
 		config.TCP = c.Bool("tcp")
 		config.TCPMark = c.Int("tcpmark")
-		config.UDPRelay = c.Bool("udprelay")
-		config.UDPIdle = c.Int("udp-idle")
 
 		if c.String("c") != "" {
 			err := parseJSONConfig(&config, c.String("c"))
@@ -339,13 +328,10 @@ func main() {
 		}
 
 		log.Println("version:", VERSION)
-		var listener *net.TCPListener
-		if !config.UDPRelay {
-			addr, err := net.ResolveTCPAddr("tcp", config.LocalAddr)
-			checkError(err)
-			listener, err = net.ListenTCP("tcp", addr)
-			checkError(err)
-		}
+		addr, err := net.ResolveTCPAddr("tcp", config.LocalAddr)
+		checkError(err)
+		listener, err := net.ListenTCP("tcp", addr)
+		checkError(err)
 
 		log.Println("initiating key derivation")
 		pass := pbkdf2.Key([]byte(config.Key), []byte(SALT), 4096, 32, sha1.New)
@@ -380,53 +366,28 @@ func main() {
 			block, _ = kcp.NewAESBlockCrypt(pass)
 		}
 
-		// Report only what the chosen mode consults.
-		log.Println("remote address:", config.RemoteAddr)
+		log.Println("listening on:", listener.Addr())
 		log.Println("encryption:", config.Crypt)
+		log.Println("nodelay parameters:", config.NoDelay, config.Interval, config.Resend, config.NoCongestion)
+		log.Println("remote address:", config.RemoteAddr)
+		log.Println("sndwnd:", config.SndWnd, "rcvwnd:", config.RcvWnd)
+		log.Println("compression:", !config.NoComp)
 		log.Println("mtu:", config.MTU)
-		log.Println("sockbuf:", config.SockBuf)
-		log.Println("keepalive:", config.KeepAlive)
+		log.Println("datashard:", config.DataShard, "parityshard:", config.ParityShard)
+		log.Println("acknodelay:", config.AckNodelay)
 		log.Println("dscp:", config.DSCP)
+		log.Println("sockbuf:", config.SockBuf)
+		log.Println("smuxbuf:", config.SmuxBuf)
+		log.Println("keepalive:", config.KeepAlive)
+		log.Println("conn:", config.Conn)
+		log.Println("autoexpire:", config.AutoExpire)
+		log.Println("scavengettl:", config.ScavengeTTL)
+		log.Println("snmplog:", config.SnmpLog)
+		log.Println("snmpperiod:", config.SnmpPeriod)
 		log.Println("quiet:", config.Quiet)
 		log.Println("tcp:", config.TCP)
 		if config.TCP {
 			log.Printf("tcpmark: 0x%x", config.TCPMark)
-		}
-		log.Println("udprelay:", config.UDPRelay)
-
-		if !config.UDPRelay {
-			log.Println("listening on:", listener.Addr())
-			log.Println("nodelay parameters:", config.NoDelay, config.Interval, config.Resend, config.NoCongestion)
-			log.Println("sndwnd:", config.SndWnd, "rcvwnd:", config.RcvWnd)
-			log.Println("compression:", !config.NoComp)
-			log.Println("datashard:", config.DataShard, "parityshard:", config.ParityShard)
-			log.Println("acknodelay:", config.AckNodelay)
-			log.Println("smuxbuf:", config.SmuxBuf)
-			log.Println("conn:", config.Conn)
-			log.Println("autoexpire:", config.AutoExpire)
-			log.Println("scavengettl:", config.ScavengeTTL)
-			log.Println("snmplog:", config.SnmpLog)
-			log.Println("snmpperiod:", config.SnmpPeriod)
-		} else {
-			log.Println("udprelay local listen:", config.LocalAddr)
-			log.Println("udp-idle:", config.UDPIdle)
-
-			conn, remote, err := dialPacket(&config)
-			checkError(err)
-			log.Println("connection:", conn.LocalAddr(), "->", remote)
-
-			checkError(udprelay.RunClient(udprelay.ClientConfig{
-				LocalAddr: config.LocalAddr,
-				Conn:      conn,
-				Remote:    remote,
-				Block:     block,
-				MaxPacket: config.MTU,
-				SockBuf:   config.SockBuf,
-				Idle:      config.UDPIdle,
-				KeepAlive: config.KeepAlive,
-				Quiet:     config.Quiet,
-			}))
-			return nil
 		}
 
 		smuxConfig := smux.DefaultConfig()
@@ -495,29 +456,24 @@ func main() {
 		chScavenger := make(chan *smux.Session, 128)
 		go scavenger(chScavenger, config.ScavengeTTL)
 		go snmpLogger(config.SnmpLog, config.SnmpPeriod)
-
-		// nextSession round-robins across the session pool, transparently
-		// rotating out a closed/expired session.
 		rr := uint16(0)
-		nextSession := func() *smux.Session {
-			idx := rr % numconn
-			if muxes[idx].session.IsClosed() || (config.AutoExpire > 0 && time.Now().After(muxes[idx].ttl)) {
-				chScavenger <- muxes[idx].session
-				muxes[idx].session = waitConn()
-				muxes[idx].ttl = time.Now().Add(time.Duration(config.AutoExpire) * time.Second)
-			}
-			sess := muxes[idx].session
-			rr++
-			return sess
-		}
-
 		for {
 			p1, err := listener.AcceptTCP()
 			if err != nil {
 				log.Fatalln(err)
 			}
 			checkError(err)
-			go handleClient(nextSession(), p1, config.Quiet)
+			idx := rr % numconn
+
+			// do auto expiration && reconnection
+			if muxes[idx].session.IsClosed() || (config.AutoExpire > 0 && time.Now().After(muxes[idx].ttl)) {
+				chScavenger <- muxes[idx].session
+				muxes[idx].session = waitConn()
+				muxes[idx].ttl = time.Now().Add(time.Duration(config.AutoExpire) * time.Second)
+			}
+
+			go handleClient(muxes[idx].session, p1, config.Quiet)
+			rr++
 		}
 	}
 	myApp.Run(os.Args)

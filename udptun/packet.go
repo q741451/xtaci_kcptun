@@ -1,4 +1,4 @@
-// Package udprelay carries a shadowsocks-libev UDP relay's datagrams over a
+// Package udptun carries a shadowsocks-libev UDP relay's datagrams over a
 // net.PacketConn: a plain UDP socket, or package rawtcp's disguised one.
 //
 // Loss is passed through, not repaired. QUIC and DNS recover on their own, and
@@ -11,7 +11,7 @@
 // Datagram boundaries survive the transport, so records carry no length. The
 // encryption is obfuscation, not security -- CRC32 is not a MAC and nothing
 // stops a replay; shadowsocks' own AEAD protects the payload.
-package udprelay
+package udptun
 
 import (
 	"crypto/aes"
@@ -25,7 +25,7 @@ import (
 	"net"
 	"sync"
 
-	kcp "github.com/xtaci/kcp-go"
+	"github.com/xtaci/kcp-go/crypt"
 )
 
 const (
@@ -43,9 +43,9 @@ const (
 )
 
 var (
-	errShortPacket = errors.New("udprelay: packet shorter than header")
-	errChecksum    = errors.New("udprelay: checksum mismatch")
-	errBufTooSmall = errors.New("udprelay: destination buffer too small")
+	errShortPacket = errors.New("udptun: packet shorter than header")
+	errChecksum    = errors.New("udptun: checksum mismatch")
+	errBufTooSmall = errors.New("udptun: destination buffer too small")
 )
 
 // applySockBuf sizes the transport's kernel buffers. net.PacketConn lacks
@@ -56,12 +56,12 @@ func applySockBuf(conn net.PacketConn, size int) {
 	}
 	if c, ok := conn.(interface{ SetReadBuffer(int) error }); ok {
 		if err := c.SetReadBuffer(size); err != nil {
-			log.Println("udprelay SetReadBuffer:", err)
+			log.Println("udptun SetReadBuffer:", err)
 		}
 	}
 	if c, ok := conn.(interface{ SetWriteBuffer(int) error }); ok {
 		if err := c.SetWriteBuffer(size); err != nil {
-			log.Println("udprelay SetWriteBuffer:", err)
+			log.Println("udptun SetWriteBuffer:", err)
 		}
 	}
 }
@@ -100,7 +100,7 @@ func (n *nonceGen) fill(dst []byte) {
 // them under a session lock -- hence the mutexes. Encrypt and Decrypt share no
 // state, so each direction gets its own.
 type Codec struct {
-	block kcp.BlockCrypt
+	block crypt.BlockCrypt
 
 	sealMu sync.Mutex
 	nonce  *nonceGen
@@ -109,7 +109,7 @@ type Codec struct {
 }
 
 // NewCodec returns a Codec using block, derived as for a KCP session.
-func NewCodec(block kcp.BlockCrypt) (*Codec, error) {
+func NewCodec(block crypt.BlockCrypt) (*Codec, error) {
 	nonce, err := newNonceGen()
 	if err != nil {
 		return nil, err

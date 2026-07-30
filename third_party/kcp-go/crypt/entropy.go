@@ -1,4 +1,4 @@
-package kcp
+package crypt
 
 import (
 	"crypto/aes"
@@ -49,4 +49,12 @@ func (n *nonceAES128) Fill(nonce []byte) {
 	}
 	n.block.Encrypt(n.seed[:], n.seed[:])
 	copy(nonce, n.seed[:])
+}
+
+// NewNonceAES128 returns an initialized nonceAES128. Split out of package kcp
+// (see ../PATCH_NOTES.md), whose sess.go used the unexported type directly.
+func NewNonceAES128() Entropy {
+	n := new(nonceAES128)
+	n.Init()
+	return n
 }

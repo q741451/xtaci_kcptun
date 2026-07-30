@@ -1,4 +1,4 @@
-package udprelay
+package udptun
 
 import (
 	"log"
@@ -8,14 +8,14 @@ import (
 	"sync/atomic"
 	"time"
 
-	kcp "github.com/xtaci/kcp-go"
+	"github.com/xtaci/kcp-go/crypt"
 )
 
 // ServerConfig configures RunServer.
 type ServerConfig struct {
 	Conn      net.PacketConn // transport facing clients
 	Target    string         // the real shadowsocks-libev server
-	Block     kcp.BlockCrypt
+	Block     crypt.BlockCrypt
 	MaxPacket int  // largest packet on the wire, header included (--mtu)
 	SockBuf   int  // --sockbuf
 	Idle      int  // seconds before an unused flow is closed
@@ -122,7 +122,7 @@ func (s *server) flowFor(client net.Addr, id uint32) (*serverFlow, error) {
 
 	conn, err := net.DialUDP("udp", nil, s.target)
 	if err != nil {
-		log.Println("udprelay DialUDP:", err)
+		log.Println("udptun DialUDP:", err)
 		return nil, err
 	}
 

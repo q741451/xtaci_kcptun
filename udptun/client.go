@@ -1,4 +1,4 @@
-package udprelay
+package udptun
 
 import (
 	"log"
@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	kcp "github.com/xtaci/kcp-go"
+	"github.com/xtaci/kcp-go/crypt"
 )
 
 // ClientConfig configures RunClient.
@@ -15,7 +15,7 @@ type ClientConfig struct {
 	LocalAddr string         // where ss-local's UDP relay points
 	Conn      net.PacketConn // transport toward the server
 	Remote    net.Addr       // server address on Conn
-	Block     kcp.BlockCrypt
+	Block     crypt.BlockCrypt
 	MaxPacket int  // largest packet on the wire, header included (--mtu)
 	SockBuf   int  // --sockbuf
 	Idle      int  // seconds before an unused flow is forgotten
@@ -80,7 +80,7 @@ func RunClient(cfg ClientConfig) error {
 		byID:   make(map[uint32]*clientFlow),
 		die:    make(chan struct{}),
 	}
-	log.Println("udprelay listening on:", local.LocalAddr())
+	log.Println("listening on:", local.LocalAddr())
 
 	errCh := make(chan error, 2)
 	go func() { errCh <- c.transportLoop() }()
@@ -137,7 +137,7 @@ func (c *client) localLoop() error {
 		// Drop, and let the sender find its path MTU.
 		if HeaderSize+n > c.cfg.MaxPacket {
 			if total := atomic.AddUint64(&c.oversize, 1); total == 1 {
-				log.Printf("udprelay: dropping %d-byte datagram, over the %d-byte limit set by -mtu; lower the sender's packet size", n, c.cfg.MaxPacket-HeaderSize)
+				log.Printf("udptun: dropping %d-byte datagram, over the %d-byte limit set by -mtu; lower the sender's packet size", n, c.cfg.MaxPacket-HeaderSize)
 			}
 			continue
 		}

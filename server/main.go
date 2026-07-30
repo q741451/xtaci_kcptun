@@ -22,7 +22,6 @@ import (
 	"github.com/urfave/cli"
 	kcp "github.com/xtaci/kcp-go"
 	"github.com/xtaci/kcptun/rawtcp"
-	"github.com/xtaci/kcptun/udprelay"
 	"github.com/xtaci/smux"
 )
 
@@ -180,7 +179,7 @@ func main() {
 		cli.IntFlag{
 			Name:  "mtu",
 			Value: 1350,
-			Usage: "set maximum transmission unit for UDP packets (-udprelay: caps each datagram, 24-byte header included)",
+			Usage: "set maximum transmission unit for UDP packets",
 		},
 		cli.IntFlag{
 			Name:  "sndwnd",
@@ -212,8 +211,9 @@ func main() {
 			Usage: "disable compression",
 		},
 		cli.BoolFlag{
-			Name:  "acknodelay",
-			Usage: "flush ack immediately when a packet is received",
+			Name:   "acknodelay",
+			Usage:  "flush ack immediately when a packet is received",
+			Hidden: true,
 		},
 		cli.IntFlag{
 			Name:   "nodelay",
@@ -282,15 +282,6 @@ func main() {
 			Value: rawtcp.DefaultMark,
 			Usage: "fwmark for -tcp's firewall rule (SO_MARK); 0 disables marking",
 		},
-		cli.BoolFlag{
-			Name:  "udprelay",
-			Usage: "relay a shadowsocks-libev UDP relay as plain datagrams, without KCP; run as a separate instance/port",
-		},
-		cli.IntFlag{
-			Name:  "udp-idle",
-			Value: 60,
-			Usage: "udprelay: seconds a flow can sit idle before it is dropped",
-		},
 		cli.StringFlag{
 			Name:  "c",
 			Value: "", // when the value is not empty, the config path must exists
@@ -326,8 +317,6 @@ func main() {
 		config.Quiet = c.Bool("quiet")
 		config.TCP = c.Bool("tcp")
 		config.TCPMark = c.Int("tcpmark")
-		config.UDPRelay = c.Bool("udprelay")
-		config.UDPIdle = c.Int("udp-idle")
 
 		if c.String("c") != "" {
 			//Now only support json config file
@@ -388,13 +377,21 @@ func main() {
 			block, _ = kcp.NewAESBlockCrypt(pass)
 		}
 
-		// Report only what the chosen mode consults.
 		log.Println("listening on:", config.Listen)
 		log.Println("target:", config.Target)
 		log.Println("encryption:", config.Crypt)
+		log.Println("nodelay parameters:", config.NoDelay, config.Interval, config.Resend, config.NoCongestion)
+		log.Println("sndwnd:", config.SndWnd, "rcvwnd:", config.RcvWnd)
+		log.Println("compression:", !config.NoComp)
 		log.Println("mtu:", config.MTU)
-		log.Println("sockbuf:", config.SockBuf)
+		log.Println("datashard:", config.DataShard, "parityshard:", config.ParityShard)
+		log.Println("acknodelay:", config.AckNodelay)
 		log.Println("dscp:", config.DSCP)
+		log.Println("sockbuf:", config.SockBuf)
+		log.Println("smuxbuf:", config.SmuxBuf)
+		log.Println("keepalive:", config.KeepAlive)
+		log.Println("snmplog:", config.SnmpLog)
+		log.Println("snmpperiod:", config.SnmpPeriod)
 		log.Println("pprof:", config.Pprof)
 		log.Println("quiet:", config.Quiet)
 		log.Println("tcp:", config.TCP)
@@ -402,66 +399,10 @@ func main() {
 			log.Printf("tcpmark: 0x%x", config.TCPMark)
 		}
 
-		if !config.UDPRelay {
-			log.Println("nodelay parameters:", config.NoDelay, config.Interval, config.Resend, config.NoCongestion)
-			log.Println("sndwnd:", config.SndWnd, "rcvwnd:", config.RcvWnd)
-			log.Println("compression:", !config.NoComp)
-			log.Println("datashard:", config.DataShard, "parityshard:", config.ParityShard)
-			log.Println("acknodelay:", config.AckNodelay)
-			log.Println("smuxbuf:", config.SmuxBuf)
-			log.Println("keepalive:", config.KeepAlive)
-			log.Println("snmplog:", config.SnmpLog)
-			log.Println("snmpperiod:", config.SnmpPeriod)
-		}
-		log.Println("udprelay:", config.UDPRelay)
-		if config.UDPRelay {
-			log.Println("udp-idle:", config.UDPIdle)
-		}
-
+		go snmpLogger(config.SnmpLog, config.SnmpPeriod)
 		if config.Pprof {
 			go http.ListenAndServe(":6060", nil)
 		}
-
-		if config.UDPRelay {
-			// No snmpLogger: those counters are kcp-go's, and there is no KCP
-			// here to feed them.
-			var wg sync.WaitGroup
-			serve := func(conn net.PacketConn, what string) {
-				defer wg.Done()
-				log.Println("udprelay listening on:", what, conn.LocalAddr())
-				if err := udprelay.RunServer(udprelay.ServerConfig{
-					Conn:      conn,
-					Target:    config.Target,
-					Block:     block,
-					MaxPacket: config.MTU,
-					SockBuf:   config.SockBuf,
-					Idle:      config.UDPIdle,
-					Quiet:     config.Quiet,
-				}); err != nil {
-					log.Println("udprelay:", what, err)
-				}
-			}
-
-			udpConn, err := net.ListenPacket("udp", config.Listen)
-			checkError(err)
-			wg.Add(1)
-			go serve(udpConn, "udp")
-
-			if config.TCP {
-				conn, err := rawtcp.Listen("tcp", config.Listen, config.TCPMark)
-				if err != nil {
-					log.Println("rawtcp.Listen():", err)
-				} else {
-					wg.Add(1)
-					go serve(conn, "tcp")
-				}
-			}
-
-			wg.Wait()
-			return nil
-		}
-
-		go snmpLogger(config.SnmpLog, config.SnmpPeriod)
 
 		// loop accepts KCP sessions off lis until it errors out (listener closed).
 		var wg sync.WaitGroup

@@ -1,4 +1,4 @@
-package kcp
+package crypt
 
 import (
 	"crypto/aes"
@@ -17,6 +17,11 @@ import (
 	"golang.org/x/crypto/twofish"
 	"golang.org/x/crypto/xtea"
 )
+
+// mtuLimit sizes NewSimpleXORBlockCrypt's key table. It mirrors kcp's own
+// mtuLimit, which lived in the same package before the split (see
+// ../PATCH_NOTES.md); it must stay 1500 or -crypt xor changes on the wire.
+const mtuLimit = 1500
 
 var (
 	initialVector = []byte{167, 115, 79, 156, 18, 172, 27, 1, 164, 21, 242, 193, 252, 120, 230, 107}

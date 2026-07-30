@@ -48,8 +48,8 @@ for **slow processors**, increasing this buffer is **CRITICAL** to receive packe
 Download a corresponding one from precompiled [Releases](https://github.com/xtaci/kcptun/releases).
 
 ```
-KCP Client: ./client_darwin_amd64 -r "KCP_SERVER_IP:4000" -l ":8388" -mode fast3 -nocomp -autoexpire 900 -sockbuf 16777217 -dscp 46
-KCP Server: ./server_linux_amd64 -t "TARGET_IP:8388" -l ":4000" -mode fast3 -nocomp -sockbuf 16777217 -dscp 46
+KCP Client: ./kcptun_client_darwin_amd64 -r "KCP_SERVER_IP:4000" -l ":8388" -mode fast3 -nocomp -autoexpire 900 -sockbuf 16777217 -dscp 46
+KCP Server: ./kcptun_server_linux_amd64 -t "TARGET_IP:8388" -l ":4000" -mode fast3 -nocomp -sockbuf 16777217 -dscp 46
 ```
 The above commands will establish port forwarding channel for 8388/tcp as:
 
@@ -61,16 +61,17 @@ which tunnels the original connection:
 
 ### UDP Relay
 
-`-udprelay` runs a second, dedicated instance (own port) that carries a [shadowsocks-libev](https://github.com/shadowsocks/shadowsocks-libev) UDP relay's traffic instead of TCP. Pair it with `-tcp` when a network throttles UDP but not TCP.
+`udptun_client`/`udptun_server` are a separate pair of binaries that relay a
+[shadowsocks-libev](https://github.com/shadowsocks/shadowsocks-libev) UDP relay's datagrams. Add `-tcp` when a network throttles UDP but not TCP.
 
 ```
-Client: ./client_linux_amd64 -r "SERVER_IP:29901" -l "127.0.0.1:8388" -udprelay
-Server: ./server_linux_amd64 -t "127.0.0.1:8388" -l ":29901" -udprelay
+Client: ./udptun_client_linux_amd64 -r "SERVER_IP:29901" -l "127.0.0.1:8388" -key SECRET
+Server: ./udptun_server_linux_amd64 -l ":29901" -t "127.0.0.1:8388" -key SECRET
 ```
 
 Point ss-local/ss-server's UDP relay at the client's `-l` / server's `-t` address.
 
-This mode is a plain datagram pipe — no KCP, so loss is passed through rather than repaired. QUIC and DNS already recover on their own, and repeating that underneath only adds latency. The flags that apply are `-key`, `-crypt`, `-tcp`, `-tcpmark`, `-sockbuf`, `-keepalive`, `-mtu`, and `-udp-idle` (seconds before an idle flow is dropped; keep it equal on both ends). The rest govern KCP and are ignored.
+There is no KCP here, so loss is passed through rather than repaired. QUIC and DNS already recover on their own, and repeating that underneath only adds latency — a retransmit the application never asked for still delays everything queued behind it. That is also why these are separate binaries: none of kcptun's tuning applies, so putting them in the same command line would only invite parameters that do nothing. `-key`/`-crypt` mean exactly what they do in kcptun.
 
 `-mtu` caps each datagram, 24-byte header included, so the payload limit is 1326 by default. Nothing fragments below this layer: larger datagrams are dropped and logged. Headroom is tighter with `-tcp`, whose IP/TCP header costs 52 bytes against UDP's 28.
 
@@ -78,10 +79,10 @@ Measured over a real link with `tc netem delay 60ms 15ms loss 3%` each way — a
 
 | | p50 | p99 | delivered |
 |---|---|---|---|
-| `-udprelay` | **123 ms** | **146 ms** | 93.7% |
-| over KCP | 280 ms | 468 ms | 98.8% |
+| `udptun` | **123 ms** | **146 ms** | 93.7% |
+| the same over KCP | 280 ms | 468 ms | 98.8% |
 
-Latency sits at the link's floor with no queueing, and delivery matches the raw link's 94.1% — the pipe adds no loss of its own. KCP recovers more datagrams, but every flow pays 2.3× the latency for it.
+Latency sits at the link's floor with no queueing, and delivery matches the raw link's 94.1% — the pipe adds no loss of its own. KCP recovers more datagrams, but every flow pays 2.3x the latency for it.
 
 ### Install from source
 
@@ -143,12 +144,12 @@ If you insist on running under some ARM routers, you'd better turn off `FEC` and
 #### Usage
 
 ```
-xtaci@gw:~$ ./client_linux_amd64 -h
+xtaci@gw:~$ ./kcptun_client_linux_amd64 -h
 NAME:
    kcptun - client(with SMUX)
 
 USAGE:
-   client_linux_amd64 [global options] command [command options] [arguments...]
+   kcptun_client_linux_amd64 [global options] command [command options] [arguments...]
 
 VERSION:
    20190409
@@ -165,14 +166,13 @@ GLOBAL OPTIONS:
    --conn value                     set num of UDP connections to server (default: 1)
    --autoexpire value               set auto expiration time(in seconds) for a single UDP connection, 0 to disable (default: 0)
    --scavengettl value              set how long an expired connection can live(in sec), -1 to disable (default: 600)
-   --mtu value                      set maximum transmission unit for UDP packets (-udprelay: caps each datagram, 24-byte header included) (default: 1350)
+   --mtu value                      set maximum transmission unit for UDP packets (default: 1350)
    --sndwnd value                   set send window size(num of packets) (default: 128)
    --rcvwnd value                   set receive window size(num of packets) (default: 512)
    --datashard value, --ds value    set reed-solomon erasure coding - datashard (default: 10)
    --parityshard value, --ps value  set reed-solomon erasure coding - parityshard (default: 3)
    --dscp value                     set DSCP(6bit) (default: 0)
    --nocomp                         disable compression
-   --acknodelay                     flush ack immediately when a packet is received
    --sockbuf value                  per-socket buffer in bytes (default: 4194304)
    --smuxbuf value                  the overall de-mux buffer in bytes (default: 4194304)
    --keepalive value                seconds between heartbeats (default: 10)
@@ -182,18 +182,16 @@ GLOBAL OPTIONS:
    --quiet                          to suppress the 'stream open/close' messages
    --tcp                            to emulate a TCP connection (linux only, root; firewall rule required, see rawtcp/doc.go)
    --tcpmark value                  fwmark for -tcp's firewall rule (SO_MARK); 0 disables marking (default: 7037808)
-   --udprelay                       relay a shadowsocks-libev UDP relay as plain datagrams, without KCP; run as a separate instance/port
-   --udp-idle value                 udprelay: seconds a flow can sit idle before it is dropped (default: 60)
    -c value                         config from json file, which will override the command from shell
    --help, -h                       show help
    --version, -v                    print the version
 
-xtaci@gw:~$ ./server_linux_amd64 -h
+xtaci@gw:~$ ./kcptun_server_linux_amd64 -h
 NAME:
    kcptun - server(with SMUX)
 
 USAGE:
-   server_linux_amd64 [global options] command [command options] [arguments...]
+   kcptun_server_linux_amd64 [global options] command [command options] [arguments...]
 
 VERSION:
    20190409
@@ -207,14 +205,13 @@ GLOBAL OPTIONS:
    --key value                      pre-shared secret between client and server (default: "it's a secrect") [$KCPTUN_KEY]
    --crypt value                    aes, aes-128, aes-192, salsa20, blowfish, twofish, cast5, 3des, tea, xtea, xor, sm4, none (default: "aes")
    --mode value                     profiles: fast3, fast2, fast, normal, manual (default: "fast")
-   --mtu value                      set maximum transmission unit for UDP packets (-udprelay: caps each datagram, 24-byte header included) (default: 1350)
+   --mtu value                      set maximum transmission unit for UDP packets (default: 1350)
    --sndwnd value                   set send window size(num of packets) (default: 1024)
    --rcvwnd value                   set receive window size(num of packets) (default: 1024)
    --datashard value, --ds value    set reed-solomon erasure coding - datashard (default: 10)
    --parityshard value, --ps value  set reed-solomon erasure coding - parityshard (default: 3)
    --dscp value                     set DSCP(6bit) (default: 0)
    --nocomp                         disable compression
-   --acknodelay                     flush ack immediately when a packet is received
    --sockbuf value                  per-socket buffer in bytes (default: 4194304)
    --smuxbuf value                  the overall de-mux buffer in bytes (default: 4194304)
    --keepalive value                seconds between heartbeats (default: 10)
@@ -225,11 +222,67 @@ GLOBAL OPTIONS:
    --quiet                          to suppress the 'stream open/close' messages
    --tcp                            also emulate a TCP listener alongside UDP (linux only, root; firewall rule required, see rawtcp/doc.go)
    --tcpmark value                  fwmark for -tcp's firewall rule (SO_MARK); 0 disables marking (default: 7037808)
-   --udprelay                       relay a shadowsocks-libev UDP relay as plain datagrams, without KCP; run as a separate instance/port
-   --udp-idle value                 udprelay: seconds a flow can sit idle before it is dropped (default: 60)
    -c value                         config from json file, which will override the command from shell
    --help, -h                       show help
    --version, -v                    print the version
+
+xtaci@gw:~$ ./udptun_client_linux_amd64 -h
+Usage of udptun_client_linux_amd64:
+  -c string
+    	config from json file, which will override the command from shell
+  -crypt string
+    	aes, aes-128, aes-192, salsa20, blowfish, twofish, cast5, 3des, tea, xtea, xor, sm4, none (default "aes")
+  -idle int
+    	seconds a flow can sit idle before it is dropped (default 60)
+  -keepalive int
+    	seconds between heartbeats (default 10)
+  -key string
+    	pre-shared secret between client and server [$KCPTUN_KEY] (default "it's a secrect")
+  -l string
+    	local listen address, where ss-local's UDP relay points (default ":12948")
+  -log string
+    	specify a log file to output, default goes to stderr
+  -mtu int
+    	largest packet on the wire, header included; bigger datagrams are dropped (default 1350)
+  -quiet
+    	suppress the per-flow open/close messages
+  -r string
+    	udptun server address (default "vps:29900")
+  -sockbuf int
+    	per-socket buffer in bytes (default 4194304)
+  -tcp
+    	emulate a TCP connection (linux only, root; firewall rule required, see rawtcp/doc.go)
+  -tcpmark int
+    	fwmark for -tcp's firewall rule (SO_MARK); 0 disables marking (default 7037808)
+  -v	print the version
+
+xtaci@gw:~$ ./udptun_server_linux_amd64 -h
+Usage of udptun_server_linux_amd64:
+  -c string
+    	config from json file, which will override the command from shell
+  -crypt string
+    	aes, aes-128, aes-192, salsa20, blowfish, twofish, cast5, 3des, tea, xtea, xor, sm4, none (default "aes")
+  -idle int
+    	seconds a flow can sit idle before it is dropped (default 60)
+  -key string
+    	pre-shared secret between client and server [$KCPTUN_KEY] (default "it's a secrect")
+  -l string
+    	udptun server listen address (default ":29900")
+  -log string
+    	specify a log file to output, default goes to stderr
+  -mtu int
+    	largest packet on the wire, header included; bigger datagrams are dropped (default 1350)
+  -quiet
+    	suppress the per-flow open/close messages
+  -sockbuf int
+    	per-socket buffer in bytes (default 4194304)
+  -t string
+    	the real shadowsocks-libev server's UDP address (default "127.0.0.1:12948")
+  -tcp
+    	also accept a TCP-disguised transport alongside UDP (linux only, root; see rawtcp/doc.go)
+  -tcpmark int
+    	fwmark for -tcp's firewall rule (SO_MARK); 0 disables marking (default 7037808)
+  -v	print the version
 ```
 
 #### Forward Error Correction
