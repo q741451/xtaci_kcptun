@@ -416,7 +416,14 @@ func Dial(network, address string, mark int) (*Conn, error) {
 		setMark(tcpconn, mark) // best-effort, see doc.go
 	}
 
-	go io.Copy(ioutil.Discard, tcpconn)
+	// The cover connection dying (peer restart, RST) means this transport is
+	// finished. Without closing here, ReadFrom would block on chMessage
+	// forever while WriteTo silently discarded everything once the flow aged
+	// out -- a tunnel that looks alive and carries nothing.
+	go func() {
+		io.Copy(ioutil.Discard, tcpconn)
+		c.Close()
+	}()
 
 	connListMu.Lock()
 	c.elem = connList.PushBack(c)
@@ -507,7 +514,18 @@ func Listen(network, address string, mark int) (*Conn, error) {
 				setMark(conn, mark) // best-effort, see doc.go
 			}
 			c.lockflow(conn.RemoteAddr(), func(e *flow) { e.conn = conn })
-			go io.Copy(ioutil.Discard, conn)
+			// Only this peer is gone; the listener serves others, so drop its
+			// flow rather than closing the shared Conn.
+			go func(conn *net.TCPConn) {
+				io.Copy(ioutil.Discard, conn)
+				key := conn.RemoteAddr().String()
+				c.flowsLock.Lock()
+				if e, ok := c.flows[key]; ok && e.conn == conn {
+					delete(c.flows, key)
+				}
+				c.flowsLock.Unlock()
+				conn.Close()
+			}(conn)
 		}
 	}()
 

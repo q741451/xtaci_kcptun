@@ -9,6 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"os"
 
 	"github.com/xtaci/kcptun/rawtcp"
@@ -46,7 +47,7 @@ func main() {
 	flag.IntVar(&c.MTU, "mtu", 1350, "largest packet on the wire, header included; bigger datagrams are dropped")
 	flag.IntVar(&c.SockBuf, "sockbuf", 4194304, "per-socket buffer in bytes")
 	flag.IntVar(&c.DSCP, "dscp", 0, "set DSCP(6bit)")
-	flag.IntVar(&c.KeepAlive, "keepalive", 10, "seconds between heartbeats")
+	flag.IntVar(&c.KeepAlive, "keepalive", 10, "seconds between heartbeats; three with no reply drops and redials the transport")
 	flag.IntVar(&c.Idle, "idle", 60, "seconds a flow can sit idle before it is dropped")
 	flag.BoolVar(&c.TCP, "tcp", false, "emulate a TCP connection (linux only, root; firewall rule required, see rawtcp/doc.go)")
 	flag.IntVar(&c.TCPMark, "tcpmark", rawtcp.DefaultMark, "fwmark for -tcp's firewall rule (SO_MARK); 0 disables marking")
@@ -77,10 +78,7 @@ func main() {
 	block, err := udptun.NewBlockCrypt(c.Crypt, c.Key)
 	checkError(err)
 
-	conn, remote, err := dial(&c)
-	checkError(err)
-
-	log.Println("remote address:", remote)
+	log.Println("remote address:", c.RemoteAddr)
 	log.Println("encryption:", c.Crypt)
 	log.Println("mtu:", c.MTU, "payload limit:", c.MTU-udptun.HeaderSize)
 	log.Println("sockbuf:", c.SockBuf)
@@ -94,8 +92,7 @@ func main() {
 
 	checkError(udptun.RunClient(udptun.ClientConfig{
 		LocalAddr: c.LocalAddr,
-		Conn:      conn,
-		Remote:    remote,
+		Dial:      func() (net.PacketConn, net.Addr, error) { return dial(&c) },
 		Block:     block,
 		MaxPacket: c.MTU,
 		SockBuf:   c.SockBuf,

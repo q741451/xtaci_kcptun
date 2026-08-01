@@ -73,6 +73,8 @@ Point ss-local/ss-server's UDP relay at the client's `-l` / server's `-t` addres
 
 There is no KCP here, so loss is passed through rather than repaired. QUIC and DNS already recover on their own, and repeating that underneath only adds latency — a retransmit the application never asked for still delays everything queued behind it. That is also why these are separate binaries: none of kcptun's tuning applies, so putting them in the same command line would only invite parameters that do nothing. `-key`, `-crypt` and `-dscp` mean exactly what they do in kcptun.
 
+If the server restarts, the client reconnects on its own: a dead transport is replaced, not fatal. `-keepalive` doubles as the liveness probe — the transport is dropped and redialled after three intervals with nothing received, so the default 10s means recovery within ~30s.
+
 `-mtu` caps each datagram, 24-byte header included, so the payload limit is 1326 by default. Nothing fragments below this layer: larger datagrams are dropped and logged. Headroom is tighter with `-tcp`, whose IP/TCP header costs 52 bytes against UDP's 28.
 
 Measured over a real link with `tc netem delay 60ms 15ms loss 3%` each way — a 120 ms floor and 5.9% round-trip loss — running DNS-sized queries against 8 concurrent bulk flows:
@@ -237,7 +239,7 @@ Usage of udptun_client_linux_amd64:
   -idle int
     	seconds a flow can sit idle before it is dropped (default 60)
   -keepalive int
-    	seconds between heartbeats (default 10)
+    	seconds between heartbeats; three with no reply drops and redials the transport (default 10)
   -key string
     	pre-shared secret between client and server [$KCPTUN_KEY] (default "it's a secrect")
   -l string

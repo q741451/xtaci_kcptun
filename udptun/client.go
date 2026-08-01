@@ -12,9 +12,11 @@ import (
 
 // ClientConfig configures RunClient.
 type ClientConfig struct {
-	LocalAddr string         // where ss-local's UDP relay points
-	Conn      net.PacketConn // transport toward the server
-	Remote    net.Addr       // server address on Conn
+	LocalAddr string // where ss-local's UDP relay points
+	// Dial opens the transport toward the server. It is called again whenever
+	// the transport goes dead, so the local listener -- and the flow table --
+	// survive a server restart.
+	Dial      func() (net.PacketConn, net.Addr, error)
 	Block     crypt.BlockCrypt
 	MaxPacket int  // largest packet on the wire, header included (--mtu)
 	SockBuf   int  // --sockbuf
@@ -44,6 +46,12 @@ type client struct {
 	codec *Codec
 	local *net.UDPConn
 
+	// current transport; replaced on reconnect
+	connMu   sync.RWMutex
+	conn     net.PacketConn
+	remote   net.Addr
+	lastRecv int64 // unix nano, atomic
+
 	mu     sync.Mutex
 	byAddr map[string]*clientFlow
 	byID   map[uint32]*clientFlow
@@ -54,8 +62,9 @@ type client struct {
 	dieOnce  sync.Once
 }
 
-// RunClient relays datagrams between cfg.LocalAddr and the server on cfg.Conn.
-// It blocks until either side fails.
+// RunClient relays datagrams between cfg.LocalAddr and the server reached by
+// cfg.Dial. It blocks until the local listener fails; a failing transport is
+// reconnected instead.
 func RunClient(cfg ClientConfig) error {
 	laddr, err := net.ResolveUDPAddr("udp", cfg.LocalAddr)
 	if err != nil {
@@ -71,9 +80,6 @@ func RunClient(cfg ClientConfig) error {
 	if err != nil {
 		return err
 	}
-	applySockBuf(cfg.Conn, cfg.SockBuf)
-	applyDSCP(cfg.Conn, cfg.DSCP)
-
 	c := &client{
 		cfg:    cfg,
 		codec:  codec,
@@ -84,14 +90,90 @@ func RunClient(cfg ClientConfig) error {
 	}
 	log.Println("listening on:", local.LocalAddr())
 
-	errCh := make(chan error, 2)
-	go func() { errCh <- c.transportLoop() }()
+	errCh := make(chan error, 1)
 	go c.maintain()
 	go func() { errCh <- c.localLoop() }()
+	go c.supervise()
 
 	err = <-errCh
 	c.dieOnce.Do(func() { close(c.die) })
 	return err
+}
+
+// supervise keeps a transport up. A dead one is replaced rather than fatal:
+// the far end restarting should cost a reconnect, not the whole relay.
+func (c *client) supervise() {
+	for {
+		conn, remote, err := c.cfg.Dial()
+		if err != nil {
+			log.Println("udptun dial:", err)
+			select {
+			case <-c.die:
+				return
+			case <-time.After(time.Second):
+			}
+			continue
+		}
+		applySockBuf(conn, c.cfg.SockBuf)
+		applyDSCP(conn, c.cfg.DSCP)
+
+		c.connMu.Lock()
+		c.conn, c.remote = conn, remote
+		c.connMu.Unlock()
+		c.touchRecv()
+		log.Println("connection:", conn.LocalAddr(), "->", remote)
+
+		go c.watchdog(conn)
+		err = c.transportLoop(conn)
+		conn.Close()
+
+		select {
+		case <-c.die:
+			return
+		default:
+		}
+		log.Println("udptun: transport lost, reconnecting:", err)
+	}
+}
+
+// watchdog replaces a transport that has gone quiet. Nothing else notices a
+// path that silently stops delivering -- a UDP socket never errors, and a
+// half-dead cover connection can linger -- so the keepalive pong is the only
+// proof the far end is still there.
+func (c *client) watchdog(conn net.PacketConn) {
+	if c.cfg.KeepAlive <= 0 {
+		return
+	}
+	dead := time.Duration(3*c.cfg.KeepAlive) * time.Second
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-c.die:
+			return
+		case <-ticker.C:
+			c.connMu.RLock()
+			current := c.conn
+			c.connMu.RUnlock()
+			if current != conn {
+				return // already replaced
+			}
+			if time.Since(time.Unix(0, atomic.LoadInt64(&c.lastRecv))) > dead {
+				log.Printf("udptun: nothing received for %v, dropping the transport", dead)
+				conn.Close() // unblocks transportLoop
+				return
+			}
+		}
+	}
+}
+
+func (c *client) touchRecv() { atomic.StoreInt64(&c.lastRecv, time.Now().UnixNano()) }
+
+// transport returns the connection to write on, nil before the first dial.
+func (c *client) transport() (net.PacketConn, net.Addr) {
+	c.connMu.RLock()
+	defer c.connMu.RUnlock()
+	return c.conn, c.remote
 }
 
 // flowFor returns addr's flow, registering one if new.
@@ -150,20 +232,25 @@ func (c *client) localLoop() error {
 		if err != nil {
 			continue
 		}
-		if _, err := c.cfg.Conn.WriteTo(pkt, c.cfg.Remote); err != nil {
+		conn, remote := c.transport()
+		if conn == nil {
+			continue // no transport yet; the datagram is not worth queueing
+		}
+		if _, err := conn.WriteTo(pkt, remote); err != nil {
 			return err
 		}
 	}
 }
 
 // transportLoop hands replies back to the socket that asked.
-func (c *client) transportLoop() error {
+func (c *client) transportLoop(conn net.PacketConn) error {
 	buf := make([]byte, 65536)
 	for {
-		n, _, err := c.cfg.Conn.ReadFrom(buf)
+		n, _, err := conn.ReadFrom(buf)
 		if err != nil {
 			return err
 		}
+		c.touchRecv()
 		flowID, payload, err := c.codec.Open(buf[:n])
 		if err != nil {
 			continue // not ours, or corrupt
@@ -212,7 +299,9 @@ func (c *client) maintain() {
 			if keepAlive > 0 && now.Sub(lastPing) >= keepAlive {
 				lastPing = now
 				if pkt, err := c.codec.Seal(out, KeepAliveFlow, nil); err == nil {
-					c.cfg.Conn.WriteTo(pkt, c.cfg.Remote)
+					if conn, remote := c.transport(); conn != nil {
+						conn.WriteTo(pkt, remote)
+					}
 				}
 			}
 		}
