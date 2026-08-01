@@ -58,6 +58,8 @@ type client struct {
 	nextID uint32
 
 	oversize uint64 // atomic
+	sendErr  int64  // unix nano of last warning, atomic
+	replyErr int64
 	die      chan struct{}
 	dieOnce  sync.Once
 }
@@ -127,6 +129,13 @@ func (c *client) supervise() {
 		err = c.transportLoop(conn)
 		conn.Close()
 
+		// Stop handing this one out before redialing: Dial can keep failing
+		// for as long as the far end is down, and every datagram meanwhile
+		// would otherwise be written to a closed connection.
+		c.connMu.Lock()
+		c.conn, c.remote = nil, nil
+		c.connMu.Unlock()
+
 		select {
 		case <-c.die:
 			return
@@ -176,6 +185,17 @@ func (c *client) transport() (net.PacketConn, net.Addr) {
 	c.connMu.RLock()
 	defer c.connMu.RUnlock()
 	return c.conn, c.remote
+}
+
+// warn rate-limits a recurring message to one line a second. Loss is normal
+// here so these must not flood, but they must not be silent either.
+func (c *client) warn(last *int64, format string, args ...interface{}) {
+	now := time.Now().UnixNano()
+	prev := atomic.LoadInt64(last)
+	if now-prev < int64(time.Second) || !atomic.CompareAndSwapInt64(last, prev, now) {
+		return
+	}
+	log.Printf(format, args...)
 }
 
 // flowFor returns addr's flow, registering one if new.
@@ -239,7 +259,10 @@ func (c *client) localLoop() error {
 			continue // no transport yet; the datagram is not worth queueing
 		}
 		if _, err := conn.WriteTo(pkt, remote); err != nil {
-			return err
+			// Expected while the supervisor swaps a dead transport out, and
+			// never worth killing the relay for: only the local listener
+			// failing is fatal. Dropping one datagram is what UDP is for.
+			c.warn(&c.sendErr, "udptun: transport write failed: %v", err)
 		}
 	}
 }
@@ -266,7 +289,7 @@ func (c *client) transportLoop(conn net.PacketConn) error {
 		}
 		f.touch()
 		if _, err := c.local.WriteToUDP(payload, f.addr); err != nil {
-			return err
+			c.warn(&c.replyErr, "udptun: reply to %s failed: %v", f.addr, err)
 		}
 	}
 }
