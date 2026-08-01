@@ -136,10 +136,12 @@ func (c *client) supervise() {
 	}
 }
 
-// watchdog replaces a transport that has gone quiet. Nothing else notices a
-// path that silently stops delivering -- a UDP socket never errors, and a
-// half-dead cover connection can linger -- so the keepalive pong is the only
-// proof the far end is still there.
+// watchdog replaces a transport that has gone quiet. It is deliberately the
+// only liveness signal: a UDP socket never errors, and under -tcp the cover
+// connection is decorative once the handshake is done -- the data path runs on
+// raw sockets and survives the RST injection that rawtcp exists to hide from.
+// Treating a dead cover connection as a dead transport would hand any
+// middlebox a way to tear down a working tunnel, so only silence counts.
 func (c *client) watchdog(conn net.PacketConn) {
 	if c.cfg.KeepAlive <= 0 {
 		return
